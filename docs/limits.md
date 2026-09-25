@@ -1,4 +1,4 @@
-# Limits
+# Request limits
 
 | Resource | Limit |
 | --- | --- |

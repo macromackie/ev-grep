@@ -1,42 +1,50 @@
-# ev-grep
+# Overview
 
-ev-grep searches files with a natural-language query. It sends each selected file to Jev and reports `match`, `no_match`, or `uncertain`.
+ev-grep finds source files from a description of their behavior. Use it to locate an implementation or narrow a code review.
 
-[Install ev-grep](./installation.md) and set your API key, then search a directory:
+[Install ev-grep and set an API key](./installation.md) before running these searches.
+
+## Find an implementation
+
+Locate retry logic without knowing the function names:
+
+```sh
+ev-grep 'Retries failed HTTP requests' src/
+```
+
+## Check error handling
+
+Find code that hides a database failure:
 
 ```sh
 ev-grep 'Catches a database failure and returns an empty result' src/
 ```
 
-Example stdout:
+Illustrative terminal output:
 
 ```text
 src/users.py     match
 src/actions.py   uncertain
 ```
 
-Matching and uncertain files appear in the terminal. Use `--json` to include every assessment, including nonmatches.
+Open the matching files to check them. Keep uncertain files in the review: they may need more context. Nonmatches are omitted from terminal output; `--json` includes every assessment.
 
-## How it works
+## Narrow a review
 
-```text
-query + paths
-      │
-      ▼
- select files ──▶ assess each file with Jev ──▶ results
-                 query + full file             match
-                                               no_match
-                                               uncertain
+Look for database writes in a few files you're reviewing:
+
+```sh
+ev-grep 'Writes to the database' src/users.py src/actions.py
 ```
 
-Each file is assessed independently. ev-grep does not read related code or compare revisions. Model results can be wrong; use them to decide where to look.
+Each assessment reads the full file. It does not compare revisions or establish whether a change introduced a problem.
 
-Queries, paths, and selected file contents go to your chosen provider. Requests use your API key and may incur charges. Use `--dry-run` to inspect the selection without sending requests.
+## Preview what gets sent
 
-## Documentation
+```sh
+ev-grep 'Retries failed HTTP requests' src/ --dry-run
+```
 
-- [Installation](./installation.md): install a binary and set your API key.
-- [Usage](./cli.md): queries, paths, and glob filters.
-- [Providers](./providers.md): OpenRouter and TypeSafe configuration.
-- [Output](./output.md): results, exit codes, and JSON Lines.
-- [Limits](./limits.md): file sizes, concurrency, and timeouts.
+A dry run lists files and sizes without making requests. During a search, the query, path, and contents of each selected file go to Jev through your chosen provider. Requests use your API key and may incur charges.
+
+See [Concepts](./concepts.md) for file context and decisions, [CLI](./cli.md) for filters and query files, or [Output](./output.md) for JSON and exit codes. Model results can be wrong; use them to decide where to look.

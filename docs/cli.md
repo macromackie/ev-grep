@@ -1,4 +1,4 @@
-# Usage
+# CLI
 
 ```sh
 ev-grep 'Performs database operations' src/
@@ -53,4 +53,4 @@ ev-grep [OPTIONS] --query-file <FILE> [PATHS]...
 Empty queries fail. Directory symlinks are not followed; explicit symlinks and special files are errors.
 Paths and text must be valid UTF-8. Files containing NUL bytes are skipped as binary. Other invalid UTF-8 inputs are errors.
 
-See [Output](./output.md) for exit codes and JSONL, and [Limits](./limits.md) for size limits.
+See [Output](./output.md) for exit codes and JSONL, and [Request limits](./limits.md) for size limits.

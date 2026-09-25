@@ -16,10 +16,23 @@ The confidence threshold is an initial policy, not a measured accuracy guarantee
 ev-grep 'Performs database operations' src/ --json > results.jsonl
 ```
 
-Each line has `schema_version`, `type`, and `data`. For example, this is a complete summary from a dry run selecting one text file:
+Each line has `schema_version`, `type`, and `data`. This summary from a dry run selecting one text file is expanded for readability. The actual record occupies one line:
 
 ```json
-{"schema_version":1,"type":"summary","data":{"dry_run":true,"errors":0,"evaluated":0,"matches":0,"no_match":0,"selected":1,"skipped":0,"uncertain":0}}
+{
+  "schema_version": 1,
+  "type": "summary",
+  "data": {
+    "dry_run": true,
+    "errors": 0,
+    "evaluated": 0,
+    "matches": 0,
+    "no_match": 0,
+    "selected": 1,
+    "skipped": 0,
+    "uncertain": 0
+  }
+}
 ```
 
 Extract matching paths:

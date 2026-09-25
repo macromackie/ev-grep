@@ -1,6 +1,6 @@
 # ev-grep
 
-ev-grep searches files using a natural-language query. It sends each file to Jev and reports whether it matches.
+A command-line search tool for finding code by behavior.
 
 ## Install
 
@@ -14,7 +14,7 @@ The installer puts `ev-grep` in `~/.local/bin`. Add that directory to your `PATH
 You can also install a specific release with [mise](https://mise.jdx.dev/):
 
 ```sh
-mise use -g github:macromackie/ev-grep@0.1.3
+mise use -g github:macromackie/ev-grep@0.1.4
 ```
 
 Archives and checksums are on the [releases page](https://github.com/macromackie/ev-grep/releases).
