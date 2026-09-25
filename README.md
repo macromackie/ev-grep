@@ -14,7 +14,7 @@ The installer puts `ev-grep` in `~/.local/bin`. Add that directory to your `PATH
 You can also install a specific release with [mise](https://mise.jdx.dev/):
 
 ```sh
-mise use -g github:macromackie/ev-grep@0.1.2
+mise use -g github:macromackie/ev-grep@0.1.3
 ```
 
 Archives and checksums are on the [releases page](https://github.com/macromackie/ev-grep/releases).
@@ -50,7 +50,8 @@ Terminal output omits `no_match` files and writes a count summary to stderr. Use
 Each file is evaluated on its own. ev-grep does not read related files for context or run the code. Results can be
 wrong; use them to decide what to inspect. Request failures are reported as errors, not as `no_match`.
 
-See the [CLI reference](docs/cli.md) for file filters, TypeSafe access, exit codes, and JSONL output.
+See the [documentation](docs/README.md) for file filters, provider configuration, exit codes, and JSONL output.
+The same pages are available at [ev-grep.com/docs](https://ev-grep.com/docs).
 
 ## Build from source
 
