@@ -1,53 +1,66 @@
 # ev-grep
 
-Find files by meaning. Ask a question about each complete file; get `match`, `no_match`, or `uncertain`.
-
-```sh
-ev-grep 'Performs database operations' src/
-ev-grep -f query.txt src/ --glob '*.rs'
-ev-grep --provider typesafe --model jev-1.13.0 'Hides database failures' src/users.py --json
-ev-grep -f - src/ --dry-run < query.txt
-```
-
-Set `OPENROUTER_API_KEY` for the default OpenRouter connection, or select `--provider typesafe` and set
-`TYPESAFE_API_KEY`. Source files are sent to the selected provider. No requests occur during `--dry-run`.
-
-The whole query file is one multiline question. With `-f`, all positional arguments are search paths.
-Without `-f`, the first positional argument is the query. Paths default to the current directory.
-
-This first release evaluates files independently. It does not retrieve helpers, run tests, or determine whether a
-change introduced a bug. An uncertain result preserves missing context or low confidence. A no-match result is a
-model assessment, not a proof of correctness. Tenet can orchestrate applicability and verification calls separately.
+ev-grep searches files using a natural-language query. It sends each file to Jev and reports whether it matches.
 
 ## Install
 
-Download a prebuilt binary for macOS or Linux (Apple Silicon/ARM64 and x86-64):
+Download a binary for macOS or Linux, on ARM64 or x86-64:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://ev-grep.com/install.sh | sh
 ```
 
-Or pin the release with mise:
+The installer puts `ev-grep` in `~/.local/bin`. Add that directory to your `PATH` if needed.
+You can also install a specific release with [mise](https://mise.jdx.dev/):
 
 ```sh
-mise use -g github:macromackie/ev-grep@0.1.1
+mise use -g github:macromackie/ev-grep@0.1.2
 ```
 
-See [releases](https://github.com/macromackie/ev-grep/releases) for archives and SHA-256 checksums.
-The installer puts the binary in `~/.local/bin`.
+Archives and checksums are on the [releases page](https://github.com/macromackie/ev-grep/releases).
+
+## Search
+
+Set an OpenRouter API key, then describe what you want to find:
+
+```sh
+export OPENROUTER_API_KEY='your-key'
+ev-grep 'Catches a database failure and returns an empty result' src/
+```
+
+Queries and selected file contents go to the provider. Requests use your account and may incur charges.
+Use `--dry-run` to inspect file selection without an API key or network requests:
+
+```sh
+ev-grep 'Catches a database failure and returns an empty result' src/ --dry-run
+```
+
+## Results
+
+Example output, showing only stdout:
+
+```text
+src/users.py     match
+src/actions.py   uncertain
+```
+
+`match` means the model judges that the file matches the query. `uncertain` means it lacks enough context or confidence.
+Terminal output omits `no_match` files and writes a count summary to stderr. Use `--json` to include every assessment.
+
+Each file is evaluated on its own. ev-grep does not read related files for context or run the code. Results can be
+wrong; use them to decide what to inspect. Request failures are reported as errors, not as `no_match`.
+
+See the [CLI reference](docs/cli.md) for file filters, TypeSafe access, exit codes, and JSONL output.
 
 ## Build from source
 
-Install [Rust](https://rustup.rs/), then run:
+Install [Rust](https://rustup.rs/), then run these commands from a source checkout:
 
 ```sh
 cargo build --release --locked -p ev-grep
 cargo install --path crates/ev-grep --locked
 ```
 
-The checked-in toolchain file selects the Rust version. Builds produce `target/release/ev-grep`;
-`cargo install` is optional. Crates.io publishing is not configured.
-
-See the [CLI reference](docs/cli.md) for limits, exit codes, and JSONL output.
+The toolchain file selects the Rust version. The build produces `target/release/ev-grep`; installation is optional.
 
 Released under the [MIT license](LICENSE).
