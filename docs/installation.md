@@ -3,7 +3,7 @@
 Prebuilt binaries support macOS and Linux on ARM64 and x86-64.
 
 ```sh
-curl -fsSL https://ev-grep.com/install.sh | sh
+curl -fsSL https://ev-grep.com/install.sh | bash
 ev-grep --version
 ```
 
@@ -37,7 +37,7 @@ See [Providers](./providers.md) for direct TypeSafe access and model selection.
 Rerun the installer to update. For a pinned version, use its installer URL or specify a version in mise:
 
 ```sh
-curl -fsSL https://ev-grep.com/v0.1.2/install.sh | sh
+curl -fsSL https://ev-grep.com/v0.1.2/install.sh | bash
 mise use -g github:macromackie/ev-grep@0.1.2
 ```
 

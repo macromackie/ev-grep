@@ -7,7 +7,7 @@ A command-line search tool for finding code by behavior.
 Download a binary for macOS or Linux, on ARM64 or x86-64:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://ev-grep.com/install.sh | sh
+curl -fsSL https://ev-grep.com/install.sh | bash
 ```
 
 The installer puts `ev-grep` in `~/.local/bin`. Add that directory to your `PATH` if needed.
