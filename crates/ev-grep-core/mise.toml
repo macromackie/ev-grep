@@ -1,0 +1,17 @@
+[tasks."test"]
+extends = "rust:test"
+
+[tasks."lint"]
+extends = "rust:lint"
+
+[tasks."typecheck"]
+extends = "rust:typecheck"
+
+[tasks."fmt"]
+extends = "rust:fmt"
+
+[tasks."fmt:check"]
+extends = "rust:fmt:check"
+
+[tasks."check"]
+extends = "rust:check"

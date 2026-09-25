@@ -1,0 +1,53 @@
+monorepo_root = true
+
+[monorepo]
+config_roots = ["crates/*"]
+
+[settings]
+idiomatic_version_file_enable_tools = ["rust"]
+
+[tasks.check]
+run = ["mise run fmt:check", "mise run lint", "mise run test", "cargo doc --workspace --no-deps --locked"]
+env.RUSTDOCFLAGS = "-D warnings"
+
+[tasks.test]
+run = "cargo test --workspace --locked"
+
+[tasks.lint]
+run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
+
+[tasks.typecheck]
+run = "cargo check --workspace --all-targets --locked"
+
+[tasks.fmt]
+run = "cargo fmt --all"
+
+[tasks."fmt:check"]
+run = "cargo fmt --all --check"
+
+[tasks.build]
+run = "cargo build --release --locked -p ev-grep"
+
+[task_templates."rust:test"]
+dir = "{{ config_root }}"
+run = "cargo test --package {{ config_root | basename }} --locked"
+
+[task_templates."rust:lint"]
+dir = "{{ config_root }}"
+run = "cargo clippy --package {{ config_root | basename }} --all-targets --locked -- -D warnings"
+
+[task_templates."rust:typecheck"]
+dir = "{{ config_root }}"
+run = "cargo check --package {{ config_root | basename }} --all-targets --locked"
+
+[task_templates."rust:fmt"]
+dir = "{{ config_root }}"
+run = "cargo fmt --package {{ config_root | basename }}"
+
+[task_templates."rust:fmt:check"]
+dir = "{{ config_root }}"
+run = "cargo fmt --package {{ config_root | basename }} --check"
+
+[task_templates."rust:check"]
+dir = "{{ config_root }}"
+run = ["mise run fmt:check", "mise run lint", "mise run test"]

@@ -1,0 +1,20 @@
+[package]
+name = "ev-grep-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures-util.workspace = true
+ignore.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
