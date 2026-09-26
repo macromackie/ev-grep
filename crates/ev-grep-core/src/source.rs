@@ -2,13 +2,30 @@ use std::{fs::File, io::Read, path::Path};
 
 use anyhow::{Context, Result, ensure};
 
+use crate::{LineRange, Target, label};
+
 pub const MAX_FILE_BYTES: usize = 64 * 1024;
 pub const MAX_QUERY_BYTES: usize = 8 * 1024;
 
 #[derive(Debug)]
 pub struct Source {
     pub path: String,
+    /// The whole file, even when a line range narrows the search; the rest of the file is context.
     pub text: String,
+    pub focus: Option<Focus>,
+}
+
+/// The lines a ranged search assesses, copied from the file with their line endings.
+#[derive(Debug)]
+pub struct Focus {
+    pub lines: LineRange,
+    pub text: String,
+}
+
+impl Source {
+    pub fn label(&self) -> String {
+        label(&self.path, self.focus.as_ref().map(|focus| focus.lines))
+    }
 }
 
 #[derive(Debug)]
@@ -52,7 +69,35 @@ pub fn read_source(path: &Path) -> Result<SourceRead> {
             .context("file path is not valid UTF-8")?
             .into(),
         text,
+        focus: None,
     }))
+}
+
+pub fn read_target(target: &Target) -> Result<SourceRead> {
+    let SourceRead::Text(mut source) = read_source(&target.path)? else {
+        return Ok(SourceRead::Binary);
+    };
+    if let Some(lines) = target.lines {
+        let text = excerpt(&source.text, lines)?;
+        source.focus = Some(Focus { lines, text });
+    }
+    Ok(SourceRead::Text(source))
+}
+
+/// Each line ends at `\n`, and a final line without one still counts. Ranges past the end are errors.
+fn excerpt(text: &str, lines: LineRange) -> Result<String> {
+    let all: Vec<&str> = text.split_inclusive('\n').collect();
+    let selected = lines
+        .start
+        .checked_sub(1)
+        .and_then(|first| all.get(first..lines.end));
+    match selected {
+        Some(selected) => Ok(selected.concat()),
+        None => anyhow::bail!(
+            "line range {lines} is outside the file, which has {} lines",
+            all.len()
+        ),
+    }
 }
 
 pub fn read_text(reader: impl Read, limit: usize) -> Result<String> {

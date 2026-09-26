@@ -13,6 +13,7 @@ use ev_grep_jev::Provider;
 )]
 pub(crate) struct Cli {
     /// Query followed by search paths; with --query-file, all values are paths.
+    /// A file path may end in :N or :N-M to assess only those lines, counting from 1.
     #[arg(value_name = "QUERY_OR_PATH")]
     pub inputs: Vec<String>,
 
@@ -36,13 +37,17 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub json: bool,
 
+    /// Write one SARIF 2.1.0 log to stdout when the search ends, for code scanning tools.
+    #[arg(long, conflicts_with = "json")]
+    pub sarif: bool,
+
     /// Inspect file selection and size limits without credentials or API requests.
     #[arg(long)]
     pub dry_run: bool,
 }
 
 impl Cli {
-    pub(crate) fn query_and_paths(&self) -> Result<(String, Vec<PathBuf>)> {
+    pub(crate) fn query_and_targets(&self) -> Result<(String, Vec<String>)> {
         let (query, paths) = if let Some(path) = &self.query_file {
             let query = if path.as_os_str() == "-" {
                 read_text(io::stdin().lock(), MAX_QUERY_BYTES)?
@@ -61,11 +66,11 @@ impl Cli {
                 .context("provide a query or --query-file")?;
             (read_text(query.as_bytes(), MAX_QUERY_BYTES)?, paths)
         };
-        let paths = if paths.is_empty() {
-            vec![PathBuf::from(".")]
+        let targets = if paths.is_empty() {
+            vec![".".to_owned()]
         } else {
-            paths.iter().map(PathBuf::from).collect()
+            paths.to_vec()
         };
-        Ok((query, paths))
+        Ok((query, targets))
     }
 }

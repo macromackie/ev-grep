@@ -2,15 +2,7 @@
 
 A query describes behavior you want to find. ev-grep reads each selected file and asks Jev whether it matches.
 
-```text
-query: "Retries failed HTTP requests"
-
-  ├── retry.ts   ── Jev ── match
-  ├── view.ts    ── Jev ── no_match
-  └── client.ts  ── Jev ── uncertain
-```
-
-Illustrative results. The same query accompanies each file; files do not share context.
+The same query accompanies each file; files do not share context.
 
 ## File context
 
@@ -19,6 +11,14 @@ An assessment receives the path and complete text of one file. A retry loop may 
 
 ev-grep does not fetch dependencies, build an index, or compare revisions. Searching files from a PR examines their
 current contents, not whether the diff introduced a problem.
+
+## Part of a file
+
+A path such as `src/users.py:20-56` narrows an assessment to those lines. Jev still receives the whole file as
+context and judges what the selected lines do, including what same-file helpers they call do. Code elsewhere in the
+file that the lines don't use does not make them match. A range of changed lines asks what that code does now; it
+still does not show whether the change introduced it. [Use with other tools](./pipelines.md) shows how to get ranges
+from `git diff` or ast-grep.
 
 ## Decisions
 
@@ -31,6 +31,22 @@ Model results can be wrong. A search helps choose what to read; it does not prov
 
 File discovery and glob filtering happen locally. Each selected text file then becomes one provider request, with up
 to four requests in flight. Use `--dry-run` to inspect file selection without a key or API calls.
+
+```text diagram
+   selected files             up to 4 requests
+  ┌──────────────┐       ┏━━━━━━━━━━━━━━━━━━━━━━┓
+  │ file A       │──────▶┃ query + A  →  Jev    ┃
+  │ file B       │──────▶┃ query + B  →  Jev    ┃
+  │ file C       │──────▶┃ query + C  →  Jev    ┃
+  │ file D       │──────▶┃ query + D  →  Jev    ┃
+  │ file E, …    │       ┗━━━━━━━━━━┳━━━━━━━━━━━┛
+  └──────────────┘                  │
+       waiting                      ▼
+                          results as they finish
+```
+
+When a request finishes, the next file takes its place. JSONL includes every result; terminal output lists matches
+and uncertain files.
 
 Requests use your provider account and may incur charges. See [Providers](./providers.md) for configuration,
 [Request limits](./limits.md) for bounds, and [Benchmarks](./benchmarks.md) for measured timings.

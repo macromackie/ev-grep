@@ -19,6 +19,7 @@ pub struct Jev {
     client: Client,
     endpoint: String,
     model: String,
+    prompt: protocol::Prompt,
 }
 
 impl Jev {
@@ -45,6 +46,7 @@ impl Jev {
             client,
             endpoint: endpoint.into(),
             model: model.into(),
+            prompt: protocol::prompt()?,
         })
     }
 }
@@ -55,7 +57,8 @@ impl Evaluator for Jev {
             !query.trim().is_empty() && query.len() <= MAX_QUERY_BYTES,
             "query must contain 1–8192 bytes"
         );
-        let body = serde_json::to_vec(&protocol::request(&self.model, query, source))?;
+        let body =
+            serde_json::to_vec(&protocol::request(&self.model, &self.prompt, query, source))?;
         ensure!(
             body.len() <= 96 * 1024,
             "encoded request exceeds 98304 bytes; context was not truncated"

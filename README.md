@@ -14,7 +14,7 @@ The installer puts `ev-grep` in `~/.local/bin`. Add that directory to your `PATH
 You can also install a specific release with [mise](https://mise.jdx.dev/):
 
 ```sh
-mise use -g github:macromackie/ev-grep@0.1.4
+mise use -g github:macromackie/ev-grep@0.2.0
 ```
 
 Archives and checksums are on the [releases page](https://github.com/macromackie/ev-grep/releases).
@@ -35,6 +35,10 @@ Use `--dry-run` to inspect file selection without an API key or network requests
 ev-grep 'Catches a database failure and returns an empty result' src/ --dry-run
 ```
 
+Add `:N-M` to a file path to assess only those lines, such as lines a branch changed:
+`ev-grep 'Writes to the database' src/users.py:40-72`. The [pipelines guide](docs/pipelines.md) gets paths and ranges
+from `rg`, `git diff`, and ast-grep.
+
 ## Results
 
 Example output, showing only stdout:
@@ -46,11 +50,12 @@ src/actions.py   uncertain
 
 `match` means the model judges that the file matches the query. `uncertain` means it lacks enough context or confidence.
 Terminal output omits `no_match` files and writes a count summary to stderr. Use `--json` to include every assessment.
+Use `--sarif` to write a SARIF log for code scanning tools such as GitHub's.
 
 Each file is evaluated on its own. ev-grep does not read related files for context or run the code. Results can be
 wrong; use them to decide what to inspect. Request failures are reported as errors, not as `no_match`.
 
-See the [documentation](docs/README.md) for file filters, provider configuration, exit codes, and JSONL output.
+See the [documentation](docs/README.md) for file filters, provider configuration, exit codes, JSONL output, and SARIF output.
 The same pages are available at [ev-grep.com/docs](https://ev-grep.com/docs).
 
 ## Build from source

@@ -1,9 +1,9 @@
-use std::{future::Future, path::PathBuf};
+use std::future::Future;
 
 use anyhow::Result;
 use futures_util::{StreamExt, stream};
 
-use crate::{Assessment, FileError, Source, SourceRead, read_source};
+use crate::{Assessment, FileError, LineRange, Source, SourceRead, Target, read_target};
 
 pub trait Evaluator: Sync {
     fn assess(
@@ -17,38 +17,39 @@ pub trait Evaluator: Sync {
 pub enum ScanEvent {
     Result {
         path: String,
+        lines: Option<LineRange>,
         assessment: Assessment,
     },
     Skipped {
         path: String,
+        lines: Option<LineRange>,
     },
     Error(FileError),
 }
 
-/// At most four files are read and evaluated concurrently; output is emitted as work completes.
+/// At most four targets are read and evaluated concurrently; output is emitted as work completes.
 pub async fn scan(
-    paths: Vec<PathBuf>,
+    targets: Vec<Target>,
     query: &str,
     evaluator: &impl Evaluator,
     mut emit: impl FnMut(ScanEvent) -> Result<()>,
 ) -> Result<()> {
-    let mut pending = stream::iter(paths)
-        .map(|path| async move {
-            let label = path.display().to_string();
-            let assessment = match read_source(&path) {
-                Ok(SourceRead::Binary) => return ScanEvent::Skipped { path: label },
+    let mut pending = stream::iter(targets)
+        .map(|target| async move {
+            let path = target.path.display().to_string();
+            let lines = target.lines;
+            let assessment = match read_target(&target) {
+                Ok(SourceRead::Binary) => return ScanEvent::Skipped { path, lines },
                 Ok(SourceRead::Text(source)) => evaluator.assess(query, &source).await,
                 Err(error) => Err(error),
             };
             match assessment {
                 Ok(assessment) => ScanEvent::Result {
-                    path: label,
+                    path,
+                    lines,
                     assessment,
                 },
-                Err(error) => ScanEvent::Error(FileError {
-                    path: label,
-                    message: format!("{error:#}"),
-                }),
+                Err(error) => ScanEvent::Error(FileError::new(&path, lines, format!("{error:#}"))),
             }
         })
         .buffer_unordered(4);

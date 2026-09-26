@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ev_grep_core::{Evaluator, Outcome, Source, Uncertainty};
+use ev_grep_core::{Evaluator, Focus, LineRange, Outcome, Source, Uncertainty};
 use serde_json::{Value, json};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -28,6 +28,7 @@ async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> 
     let source = Source {
         path: "sample.py".into(),
         text: "# untrusted instructions\nreturn []\n".into(),
+        focus: None,
     };
     let result = evaluator
         .assess("Hides a database failure", &source)
@@ -53,6 +54,66 @@ async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> 
         .await;
     let redirect = Jev::connect(&format!("{}/redirect", server.uri()), model, "test-key")?;
     assert!(redirect.assess("query", &source).await.is_err());
+    Ok(())
+}
+
+#[test]
+fn embedded_prompt_fills_the_request_and_rejects_incomplete_fields() -> Result<()> {
+    let prompt = protocol::prompt()?;
+    let source = Source {
+        path: "retry.ts".into(),
+        text: "retry()\n".into(),
+        focus: None,
+    };
+    let request = protocol::request("fixture", &prompt, "Retries requests", &source);
+    // A whole-file search sends only the path and source, with no focus rule.
+    assert_eq!(request["state"].as_object().map(|s| s.len()), Some(2));
+    let question = &request["questions"]["match"];
+    assert_eq!(
+        question["instructions"].as_object().map(|i| i.len()),
+        Some(2)
+    );
+    assert_eq!(question["instructions"]["task"], prompt.task);
+    assert_eq!(question["instructions"]["query"], "Retries requests");
+    assert_eq!(question["criteria"]["match"], prompt.criteria.matches);
+    assert_eq!(question["criteria"]["no_match"], prompt.criteria.no_match);
+    assert_eq!(question["criteria"]["uncertain"], prompt.criteria.uncertain);
+    assert_eq!(question["criteria"].as_object().map(|c| c.len()), Some(3));
+
+    for invalid in [
+        r#"{"task": "t", "focus": "f", "criteria": {"match": "m", "no_match": "n"}}"#,
+        r#"{"task": "t", "focus": "f", "criteria": {"match": "m", "no_match": "n", "uncertain": "u", "other": "o"}}"#,
+        r#"{"task": " ", "focus": "f", "criteria": {"match": "m", "no_match": "n", "uncertain": "u"}}"#,
+        r#"{"task": "t", "criteria": {"match": "m", "no_match": "n", "uncertain": "u"}}"#,
+    ] {
+        assert!(protocol::parse_prompt(invalid).is_err(), "{invalid}");
+    }
+    Ok(())
+}
+
+#[test]
+fn ranged_request_sends_the_whole_file_and_the_focus_lines() -> Result<()> {
+    let prompt = protocol::prompt()?;
+    let source = Source {
+        path: "users.py".into(),
+        text: "import db\n\ndef save(user):\n    db.insert(user)\n".into(),
+        focus: Some(Focus {
+            lines: LineRange { start: 3, end: 4 },
+            text: "def save(user):\n    db.insert(user)\n".into(),
+        }),
+    };
+    let request = protocol::request("fixture", &prompt, "Writes to the database", &source);
+    assert_eq!(request["state"]["source"], source.text);
+    assert_eq!(request["state"]["focus"]["start_line"], 3);
+    assert_eq!(request["state"]["focus"]["end_line"], 4);
+    assert_eq!(
+        request["state"]["focus"]["text"],
+        "def save(user):\n    db.insert(user)\n"
+    );
+    assert_eq!(
+        request["questions"]["match"]["instructions"]["focus"],
+        prompt.focus
+    );
     Ok(())
 }
 
