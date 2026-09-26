@@ -6,7 +6,7 @@ mod source;
 mod target;
 
 pub use discovery::{Discovery, discover};
-pub use scan::{Evaluator, ScanEvent, scan};
+pub use scan::{Evaluator, ScanEvent, scan, scan_with_jobs};
 pub use source::{
     Focus, MAX_FILE_BYTES, MAX_QUERY_BYTES, Source, SourceRead, read_source, read_target, read_text,
 };

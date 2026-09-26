@@ -6,7 +6,7 @@ use std::{io, process::ExitCode};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ev_grep_core::{ScanEvent, SourceRead, discover, read_target, scan};
+use ev_grep_core::{ScanEvent, SourceRead, discover, read_target, scan_with_jobs};
 use ev_grep_jev::{Jev, MIN_CONFIDENCE};
 use serde_json::json;
 
@@ -45,7 +45,7 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
     let model = cli.provider.model(cli.model.as_deref())?;
     output.begin(
         &query,
-        json!({"provider": cli.provider, "requested_model": model, "min_confidence": MIN_CONFIDENCE, "dry_run": cli.dry_run}),
+        json!({"provider": cli.provider, "requested_model": model, "min_confidence": MIN_CONFIDENCE, "dry_run": cli.dry_run, "jobs": cli.jobs}),
     )?;
     let found = discover(&arguments, &cli.glob)?;
     output.summary.selected = found.targets.len();
@@ -73,8 +73,12 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
     let key = std::env::var(key_name)
         .with_context(|| format!("set {key_name} for provider {}", cli.provider))?;
     let jev = Jev::new(cli.provider, &model, &key)?;
-    scan(found.targets, &query, &jev, |event| {
-        output.scan_event(event)
-    })
+    scan_with_jobs(
+        found.targets,
+        &query,
+        &jev,
+        usize::from(cli.jobs),
+        |event| output.scan_event(event),
+    )
     .await
 }

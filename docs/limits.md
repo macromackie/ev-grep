@@ -2,7 +2,7 @@
 
 | Resource | Limit |
 | --- | --- |
-| Concurrent requests | 4 |
+| Concurrent requests | 4 by default; `--jobs 1..256` |
 | Connection timeout | 10 seconds |
 | Full request timeout | 60 seconds |
 | File | 64 KiB |

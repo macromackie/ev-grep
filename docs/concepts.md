@@ -30,7 +30,7 @@ Model results can be wrong. A search helps choose what to read; it does not prov
 ## Requests
 
 File discovery and glob filtering happen locally. Each selected text file then becomes one provider request, with up
-to four requests in flight. Use `--dry-run` to inspect file selection without a key or API calls.
+to four requests in flight by default (`--jobs` changes the limit). Use `--dry-run` to inspect file selection without a key or API calls.
 
 ```text diagram
    selected files             up to 4 requests

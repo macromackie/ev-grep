@@ -43,19 +43,19 @@ ast-grep scan --json=stream src/ --inline-rules '{id: catches, language: python,
 
 The rule selects each Python function that contains an `except` clause. ev-grep then assesses each function, with the rest of its file as context. ast-grep's JSON counts lines from 0, hence the `+ 1`.
 
-## Chain searches
+## Narrow a review in two passes
 
 ```sh
-ev-grep 'Handles a database error' src/ \
+ev-grep 'Performs database operations or handles their failures' src/ \
   | cut -f1 | tr '\n' '\0' | xargs -0 -r ev-grep 'Returns an empty result instead of the error'
 ```
 
-Terminal output lists each match or uncertain result as a location, a tab, and the outcome. `cut -f1` keeps the location, which ev-grep accepts again, ranges included. A broad first query narrows the files; a stricter second query checks what remains.
+Terminal output lists each match or uncertain result as a location, a tab, and the outcome. `cut -f1` keeps the location, which ev-grep accepts again, ranges included. The first query keeps candidates, including uncertainty. The second looks for a specific violation. Inspect its matches and uncertain results before writing a review comment. Neither pass establishes whether a change introduced the behavior.
 
 To pass on matches only, drop uncertain results with JSON output:
 
 ```sh
-ev-grep 'Handles a database error' src/ --json \
+ev-grep 'Performs database operations or handles their failures' src/ --json \
   | jq -r 'select(.type == "result" and .data.assessment.outcome == "match") | .data
            | .path + (if .start_line then ":\(.start_line)-\(.end_line)" else "" end)'
 ```
@@ -76,7 +76,10 @@ jobs:
       - run: |
           curl -fsSL https://ev-grep.com/install.sh | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - run: ev-grep 'Catches a database failure and returns an empty result' src/ --sarif > ev-grep.sarif || test $? -ne 2
+      - run: |
+          status=0
+          ev-grep 'Catches a database failure and returns an empty result' src/ --sarif > ev-grep.sarif || status=$?
+          case "$status" in 0|1|3) ;; *) exit "$status" ;; esac
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       - uses: github/codeql-action/upload-sarif@v4
@@ -85,7 +88,7 @@ jobs:
           category: ev-grep-database-errors
 ```
 
-[SARIF output](./output.md#sarif) turns matches into warnings and uncertain results into notes, which appear as code scanning alerts. `|| test $? -ne 2` lets the step pass when ev-grep exits `1` or `3`, so only an execution error fails the job. Give each query its own `category` so its results don't replace another query's. Store the API key as a repository secret. Code scanning is available for public repositories, and for private ones with GitHub Code Security.
+[SARIF output](./output.md#sarif) turns matches into warnings and uncertain results into notes, which appear as code scanning alerts. The step accepts search outcomes (`0`, `1`, or `3`) and fails on execution errors or interruption. Give each query its own `category` so its results don't replace another query's. Store the API key as a repository secret. Code scanning is available for public repositories, and for private ones with GitHub Code Security.
 
 ## Pitfalls
 

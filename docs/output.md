@@ -62,7 +62,7 @@ JSONL schema version 1 includes:
 
 | Type | Data |
 | --- | --- |
-| `begin` | `provider`, `requested_model`, `min_confidence`, `dry_run` |
+| `begin` | `provider`, `requested_model`, `min_confidence`, `dry_run`, `jobs` |
 | `selected` | Dry run only: `path`, `bytes` |
 | `result` | `path`, `assessment` |
 | `skipped` | `path`, `reason: "binary"` |

@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use futures_util::{StreamExt, stream};
 
 use crate::{Assessment, FileError, LineRange, Source, SourceRead, Target, read_target};
@@ -32,8 +32,20 @@ pub async fn scan(
     targets: Vec<Target>,
     query: &str,
     evaluator: &impl Evaluator,
+    emit: impl FnMut(ScanEvent) -> Result<()>,
+) -> Result<()> {
+    scan_with_jobs(targets, query, evaluator, 4, emit).await
+}
+
+/// Scan with a bounded pool of 1 to 256 concurrent assessments.
+pub async fn scan_with_jobs(
+    targets: Vec<Target>,
+    query: &str,
+    evaluator: &impl Evaluator,
+    jobs: usize,
     mut emit: impl FnMut(ScanEvent) -> Result<()>,
 ) -> Result<()> {
+    ensure!((1..=256).contains(&jobs), "jobs must be between 1 and 256");
     let mut pending = stream::iter(targets)
         .map(|target| async move {
             let path = target.path.display().to_string();
@@ -52,7 +64,7 @@ pub async fn scan(
                 Err(error) => ScanEvent::Error(FileError::new(&path, lines, format!("{error:#}"))),
             }
         })
-        .buffer_unordered(4);
+        .buffer_unordered(jobs);
     while let Some(event) = pending.next().await {
         emit(event)?;
     }

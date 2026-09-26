@@ -33,6 +33,10 @@ pub(crate) struct Cli {
     #[arg(long, env = "EV_GREP_MODEL")]
     pub model: Option<String>,
 
+    /// Maximum concurrent requests (1 to 256).
+    #[arg(short = 'j', long, default_value_t = 4, value_parser = clap::value_parser!(u16).range(1..=256))]
+    pub jobs: u16,
+
     /// Emit versioned JSON Lines, including nonmatches, errors, and a final summary.
     #[arg(long)]
     pub json: bool,

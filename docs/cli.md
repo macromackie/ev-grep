@@ -45,6 +45,14 @@ ev-grep 'Performs database operations' src/ --dry-run
 
 A dry run lists selected text files and line ranges with the size of each file. It makes no API requests and needs no key.
 
+## Limit concurrency
+
+```sh
+ev-grep 'Catches a database failure and returns an empty result' src/ --jobs 2
+```
+
+Up to four requests run at once by default. `--jobs` accepts 1 to 256. Lower it when sharing a provider account with other tools. More jobs do not reduce the number of requests.
+
 ## Options
 
 ```text
@@ -58,6 +66,7 @@ ev-grep [OPTIONS] --query-file <FILE> [PATHS]...
 | `-g, --glob GLOB` | Filter paths; repeat to add filters, prefix with `!` to exclude |
 | `--provider PROVIDER` | `openrouter` (default) or `typesafe` |
 | `--model MODEL` | A supported pinned model for the selected provider |
+| `-j, --jobs N` | Maximum concurrent requests (default 4) |
 | `--json` | Write versioned JSON Lines to stdout |
 | `--sarif` | Write one SARIF 2.1.0 log to stdout for code scanning tools; cannot be combined with `--json` |
 | `--dry-run` | List files without credentials or API requests |

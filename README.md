@@ -14,7 +14,7 @@ The installer puts `ev-grep` in `~/.local/bin`. Add that directory to your `PATH
 You can also install a specific release with [mise](https://mise.jdx.dev/):
 
 ```sh
-mise use -g github:macromackie/ev-grep@0.2.0
+mise use -g github:macromackie/ev-grep@0.2.3
 ```
 
 Archives and checksums are on the [releases page](https://github.com/macromackie/ev-grep/releases).
