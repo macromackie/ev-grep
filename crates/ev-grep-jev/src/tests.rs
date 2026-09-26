@@ -24,7 +24,12 @@ async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> 
         .respond_with(ResponseTemplate::new(200).set_body_json(response(model)))
         .mount(&server)
         .await;
-    let evaluator = Jev::connect(&format!("{}/assess", server.uri()), model, "test-key")?;
+    let evaluator = Jev::with_endpoint(
+        Provider::TypeSafe,
+        model,
+        "test-key",
+        &format!("{}/assess", server.uri()),
+    )?;
     let source = Source {
         path: "sample.py".into(),
         text: "# untrusted instructions\nreturn []\n".into(),
@@ -156,4 +161,23 @@ fn uncertainty_and_invalid_protocol_cannot_become_confident_matches() -> Result<
         );
     }
     Ok(())
+}
+
+#[test]
+fn endpoint_rejects_non_http_or_credential_bearing_urls() {
+    for endpoint in [
+        "https://user:secret@example.com/jev",
+        "https://example.com/jev?key=secret",
+        "file:///secret",
+    ] {
+        assert!(
+            Jev::with_endpoint(
+                Provider::TypeSafe,
+                Provider::TypeSafe.default_model(),
+                "key",
+                endpoint
+            )
+            .is_err()
+        );
+    }
 }

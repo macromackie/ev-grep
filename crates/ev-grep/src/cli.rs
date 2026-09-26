@@ -33,6 +33,10 @@ pub(crate) struct Cli {
     #[arg(long, env = "EV_GREP_MODEL")]
     pub model: Option<String>,
 
+    /// Send requests to this trusted, protocol-compatible endpoint.
+    #[arg(long, env = "EV_GREP_ENDPOINT")]
+    pub endpoint: Option<String>,
+
     /// Maximum concurrent requests (1 to 256).
     #[arg(short = 'j', long, default_value_t = 4, value_parser = clap::value_parser!(u16).range(1..=256))]
     pub jobs: u16,

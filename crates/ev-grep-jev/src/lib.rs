@@ -24,8 +24,27 @@ pub struct Jev {
 
 impl Jev {
     pub fn new(provider: Provider, model: &str, key: &str) -> Result<Self> {
+        Self::with_endpoint(provider, model, key, provider.endpoint())
+    }
+
+    pub fn with_endpoint(
+        provider: Provider,
+        model: &str,
+        key: &str,
+        endpoint: &str,
+    ) -> Result<Self> {
         provider.model(Some(model))?;
-        Self::connect(provider.endpoint(), model, key)
+        let url = reqwest::Url::parse(endpoint)
+            .map_err(|_| anyhow::anyhow!("invalid provider endpoint"))?;
+        ensure!(
+            matches!(url.scheme(), "https" | "http")
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            "provider endpoint must use HTTP or HTTPS, without credentials, query, or fragment"
+        );
+        Self::connect(endpoint, model, key)
     }
 
     fn connect(endpoint: &str, model: &str, key: &str) -> Result<Self> {

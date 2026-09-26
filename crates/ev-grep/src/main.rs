@@ -72,7 +72,12 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
     let key_name = cli.provider.key_variable();
     let key = std::env::var(key_name)
         .with_context(|| format!("set {key_name} for provider {}", cli.provider))?;
-    let jev = Jev::new(cli.provider, &model, &key)?;
+    let jev = Jev::with_endpoint(
+        cli.provider,
+        &model,
+        &key,
+        cli.endpoint.as_deref().unwrap_or(cli.provider.endpoint()),
+    )?;
     scan_with_jobs(
         found.targets,
         &query,

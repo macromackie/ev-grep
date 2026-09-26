@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.4
+
+- Use `--endpoint` or `EV_GREP_ENDPOINT` to send requests through a trusted provider proxy.
+
 ## v0.2.3
 
 - `--jobs N` controls concurrent requests, from 1 to 256. The default remains four. JSONL begin records include the chosen limit.

@@ -48,3 +48,7 @@ git clone https://github.com/macromackie/ev-grep.git
 cd ev-grep
 cargo build --release --locked
 ```
+
+## Provider proxy
+
+`--endpoint URL` (or `EV_GREP_ENDPOINT`) sends requests and the selected provider credential to that URL. Use a trusted proxy that implements the provider protocol. Use HTTPS for remote services; HTTP is supported for local development. Redirects are disabled.
