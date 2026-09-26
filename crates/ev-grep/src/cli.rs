@@ -41,6 +41,10 @@ pub(crate) struct Cli {
     #[arg(short = 'j', long, default_value_t = 4, value_parser = clap::value_parser!(u16).range(1..=256))]
     pub jobs: u16,
 
+    /// Route answers below this confidence to uncertain (0 to 1).
+    #[arg(long, default_value_t = ev_grep_jev::MIN_CONFIDENCE, value_parser = confidence)]
+    pub min_confidence: f64,
+
     /// Emit versioned JSON Lines, including nonmatches, errors, and a final summary.
     #[arg(long)]
     pub json: bool,
@@ -52,6 +56,14 @@ pub(crate) struct Cli {
     /// Inspect file selection and size limits without credentials or API requests.
     #[arg(long)]
     pub dry_run: bool,
+}
+
+fn confidence(value: &str) -> std::result::Result<f64, String> {
+    let value: f64 = value.parse().map_err(|_| "expected a number from 0 to 1")?;
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err("confidence must be between 0 and 1".into());
+    }
+    Ok(value)
 }
 
 impl Cli {

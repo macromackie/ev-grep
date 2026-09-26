@@ -67,6 +67,7 @@ ev-grep [OPTIONS] --query-file <FILE> [PATHS]...
 | `--provider PROVIDER` | `openrouter` (default) or `typesafe` |
 | `--model MODEL` | A supported pinned model for the selected provider |
 | `-j, --jobs N` | Maximum concurrent requests (default 4) |
+| `--min-confidence N` | Route answers below N to uncertain; 0 to 1 (default 0.8) |
 | `--json` | Write versioned JSON Lines to stdout |
 | `--sarif` | Write one SARIF 2.1.0 log to stdout for code scanning tools; cannot be combined with `--json` |
 | `--dry-run` | List files without credentials or API requests |

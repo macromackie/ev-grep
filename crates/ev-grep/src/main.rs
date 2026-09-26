@@ -7,7 +7,7 @@ use std::{io, process::ExitCode};
 use anyhow::{Context, Result};
 use clap::Parser;
 use ev_grep_core::{ScanEvent, SourceRead, discover, read_target, scan_with_jobs};
-use ev_grep_jev::{Jev, MIN_CONFIDENCE};
+use ev_grep_jev::Jev;
 use serde_json::json;
 
 use cli::Cli;
@@ -45,7 +45,7 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
     let model = cli.provider.model(cli.model.as_deref())?;
     output.begin(
         &query,
-        json!({"provider": cli.provider, "requested_model": model, "min_confidence": MIN_CONFIDENCE, "dry_run": cli.dry_run, "jobs": cli.jobs}),
+        json!({"provider": cli.provider, "requested_model": model, "min_confidence": cli.min_confidence, "dry_run": cli.dry_run, "jobs": cli.jobs}),
     )?;
     let found = discover(&arguments, &cli.glob)?;
     output.summary.selected = found.targets.len();
@@ -77,7 +77,8 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
         &model,
         &key,
         cli.endpoint.as_deref().unwrap_or(cli.provider.endpoint()),
-    )?;
+    )?
+    .with_min_confidence(cli.min_confidence)?;
     scan_with_jobs(
         found.targets,
         &query,

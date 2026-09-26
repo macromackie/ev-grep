@@ -20,6 +20,7 @@ pub struct Jev {
     endpoint: String,
     model: String,
     prompt: protocol::Prompt,
+    min_confidence: f64,
 }
 
 impl Jev {
@@ -66,18 +67,21 @@ impl Jev {
             endpoint: endpoint.into(),
             model: model.into(),
             prompt: protocol::prompt()?,
+            min_confidence: MIN_CONFIDENCE,
         })
     }
-}
 
-impl Evaluator for Jev {
-    async fn assess(&self, query: &str, source: &Source) -> Result<Assessment> {
+    pub fn with_min_confidence(mut self, minimum: f64) -> Result<Self> {
         ensure!(
-            !query.trim().is_empty() && query.len() <= MAX_QUERY_BYTES,
-            "query must contain 1–8192 bytes"
+            minimum.is_finite() && (0.0..=1.0).contains(&minimum),
+            "minimum confidence must be between 0 and 1"
         );
-        let body =
-            serde_json::to_vec(&protocol::request(&self.model, &self.prompt, query, source))?;
+        self.min_confidence = minimum;
+        Ok(self)
+    }
+
+    async fn send(&self, request: &serde_json::Value) -> Result<Assessment> {
+        let body = serde_json::to_vec(request)?;
         ensure!(
             body.len() <= 96 * 1024,
             "encoded request exceeds 98304 bytes; context was not truncated"
@@ -110,6 +114,31 @@ impl Evaluator for Jev {
         }
         protocol::assessment(&bytes, &self.model)
     }
+}
+
+impl Evaluator for Jev {
+    async fn assess(&self, query: &str, source: &Source) -> Result<Assessment> {
+        validate_query(query)?;
+        let request = protocol::request(&self.model, &self.prompt, query, source);
+        Ok(self
+            .send(&request)
+            .await?
+            .with_min_confidence(self.min_confidence))
+    }
+
+    async fn assess_context(&self, query: &str, state: &serde_json::Value) -> Result<Assessment> {
+        validate_query(query)?;
+        self.send(&protocol::context_request(&self.model, query, state))
+            .await
+    }
+}
+
+fn validate_query(query: &str) -> Result<()> {
+    ensure!(
+        !query.trim().is_empty() && query.len() <= MAX_QUERY_BYTES,
+        "query must contain 1–8192 bytes"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

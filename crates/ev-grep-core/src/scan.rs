@@ -11,6 +11,22 @@ pub trait Evaluator: Sync {
         query: &str,
         source: &Source,
     ) -> impl Future<Output = Result<Assessment>> + Send;
+
+    /// Assess labeled context without assuming it is one source file.
+    fn assess_context(
+        &self,
+        query: &str,
+        state: &serde_json::Value,
+    ) -> impl Future<Output = Result<Assessment>> + Send {
+        async move {
+            let source = Source {
+                path: "<context>".into(),
+                text: serde_json::to_string(state)?,
+                focus: None,
+            };
+            Ok(self.assess(query, &source).await?.with_min_confidence(0.0))
+        }
+    }
 }
 
 #[derive(Debug)]

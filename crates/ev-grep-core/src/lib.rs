@@ -44,6 +44,25 @@ pub struct Assessment {
     pub output_tokens: u64,
 }
 
+impl Assessment {
+    /// Apply a caller's routing policy without losing the provider's answer.
+    pub fn with_min_confidence(mut self, minimum: f64) -> Self {
+        self.reason = if self.choice == Outcome::Uncertain {
+            Some(Uncertainty::InsufficientContext)
+        } else if self.confidence < minimum {
+            Some(Uncertainty::LowConfidence)
+        } else {
+            None
+        };
+        self.outcome = if self.reason.is_some() {
+            Outcome::Uncertain
+        } else {
+            self.choice
+        };
+        self
+    }
+}
+
 #[derive(Debug)]
 pub struct FileError {
     pub path: String,

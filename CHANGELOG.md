@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.0
+
+- Set `--min-confidence` to control which search results remain uncertain. JSON retains the original answer and score.
+- Support structured context assessments in the Rust provider adapter for tools that compare changes or related files.
+
 ## v0.2.4
 
 - Use `--endpoint` or `EV_GREP_ENDPOINT` to send requests through a trusted provider proxy.

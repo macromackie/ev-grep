@@ -8,7 +8,9 @@ Terminal output lists matching and uncertain files as `path`, a tab, then the ou
 | `no_match` | The model judges that the file provides enough evidence to reject the query |
 | `uncertain` | The model reports insufficient context, or its confidence is below `0.8` |
 
-The confidence threshold is an initial policy, not a measured accuracy guarantee. A failed request is an execution error, never a semantic outcome.
+The default confidence threshold is `0.8`. Set `--min-confidence 0.9` to retain answers below `0.9` as uncertain. Values range from `0` to `1`; even `0` keeps an explicit uncertain answer. The threshold is a routing policy, not an accuracy guarantee. A failed request is an execution error, never a semantic outcome.
+
+JSON retains the raw `choice`, `confidence`, and `probabilities` even when the threshold changes the `outcome`. Confidence describes the model's answer, not the completeness of a code review.
 
 ## JSON Lines
 

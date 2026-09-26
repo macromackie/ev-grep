@@ -94,3 +94,13 @@ jobs:
 
 - ev-grep reads stdin only with `-f -`, and only as the query. `cat file.py | ev-grep 'query'` does not search the piped text; with no paths, ev-grep searches the current directory.
 - xargs may split a long list into several ev-grep runs, each with its own summary, JSON stream, and exit code. xargs exits `123` when any run exits with 1 to 125, which includes ev-grep's "no matches" (`1`) and "uncertain" (`3`). Read ev-grep's [summaries and exit codes](./output.md#exit-codes) rather than xargs's status.
+# Confidence
+
+Keep uncertain files when a later reviewer can investigate them:
+
+```sh
+ev-grep 'Performs database operations' src/ --min-confidence 0.9 --json > results.jsonl
+jq -r 'select(.type == "result" and .data.assessment.outcome != "no_match") | .data.path' results.jsonl
+```
+
+For a narrower search, select only `match` outcomes. JSON always includes every assessed file, so you can apply a different policy without repeating model calls. Read the command's exit status and final summary before treating either selection as complete.

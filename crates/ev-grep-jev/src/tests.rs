@@ -50,6 +50,19 @@ async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> 
         "Hides a database failure"
     );
 
+    let state =
+        json!({"contract": "Preserve errors.", "change": {"before": null, "after": source.text}});
+    let result = evaluator
+        .assess_context("Does this change hide an error?", &state)
+        .await?;
+    assert_eq!(result.confidence, 0.95);
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing requests"))?;
+    let structured: Value = serde_json::from_slice(&requests[1].body)?;
+    assert_eq!(structured["state"], state);
+
     Mock::given(path("/redirect"))
         .respond_with(
             ResponseTemplate::new(307)
@@ -127,10 +140,23 @@ fn uncertainty_and_invalid_protocol_cannot_become_confident_matches() -> Result<
     let model = Provider::TypeSafe.default_model();
     let mut body = response(model);
     body["answers"]["match"]["confidence"] = json!(0.5);
-    let result = protocol::assessment(&serde_json::to_vec(&body)?, model)?;
+    let raw = protocol::assessment(&serde_json::to_vec(&body)?, model)?;
+    assert_eq!(raw.outcome, Outcome::Match);
+    let result = raw.with_min_confidence(0.8);
     assert_eq!(result.outcome, Outcome::Uncertain);
     assert_eq!(result.choice, Outcome::Match);
     assert_eq!(result.reason, Some(Uncertainty::LowConfidence));
+    assert_eq!(result.with_min_confidence(0.5).outcome, Outcome::Match);
+
+    body["answers"]["match"]["choice"] = json!("uncertain");
+    body["answers"]["match"]["probabilities"] =
+        json!({"match":0.01,"no_match":0.01,"uncertain":0.98});
+    assert_eq!(
+        protocol::assessment(&serde_json::to_vec(&body)?, model)?
+            .with_min_confidence(0.0)
+            .outcome,
+        Outcome::Uncertain
+    );
 
     for mutation in ["model", "labels", "sum", "choice", "missing"] {
         let mut body = response(model);
