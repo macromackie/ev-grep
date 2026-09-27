@@ -3,7 +3,7 @@
 
 use std::{collections::BTreeMap, path::Path};
 
-use ev_grep_core::{Assessment, LineRange, Outcome, Uncertainty};
+use ev_grep_core::{Assessment, Candidate, LineRange, Outcome, Uncertainty};
 use serde_json::{Value, json};
 
 const SCHEMA: &str = "https://json.schemastore.org/sarif-2.1.0.json";
@@ -27,7 +27,7 @@ impl Sarif {
     }
 
     /// Matches become warnings and uncertain results become notes. Nonmatches are left out, as in terminal output.
-    pub(crate) fn result(&mut self, path: &str, lines: Option<LineRange>, assessment: &Assessment) {
+    pub(crate) fn result(&mut self, candidate: &Candidate, assessment: &Assessment) {
         let Some(query) = &self.query else {
             return;
         };
@@ -46,13 +46,30 @@ impl Sarif {
             ),
             (Outcome::Uncertain, _) => ("note", "ev-grep uncertain: insufficient context".into()),
         };
+        let locations: Vec<Value> = candidate
+            .file
+            .iter()
+            .map(|file| {
+                json!({
+                    "physicalLocation": {
+                        "artifactLocation": artifact_location(file),
+                        "region": {
+                            "startLine": candidate.range.start.line + 1,
+                            "startColumn": candidate.range.start.column + 1,
+                            "endLine": candidate.range.end.line + 1,
+                            "endColumn": candidate.range.end.column + 1,
+                        }
+                    }
+                })
+            })
+            .collect();
         self.results.push(json!({
             "ruleId": rule_id(query),
             "ruleIndex": 0,
             "level": level,
             "message": { "text": format!("{} ({detail})", clip(title(query), TITLE_CHARS)) },
-            "locations": [location(path, lines)],
-            "properties": { "assessment": assessment }
+            "locations": locations,
+            "properties": { "assessment": crate::output::raw_assessment(assessment) }
         }));
     }
 
@@ -80,6 +97,7 @@ impl Sarif {
         let mut properties = self.properties.clone();
         properties["summary"] = summary;
         let mut run = json!({
+            "columnKind": "unicodeCodePoints",
             "tool": { "driver": {
                 "name": "ev-grep",
                 "version": env!("CARGO_PKG_VERSION"),

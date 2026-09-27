@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
 use anyhow::Result;
-use ev_grep_core::{LineRange, Outcome, ScanEvent, Source, label};
+use ev_grep_core::{Assessment, Candidate, LineRange, Outcome, ScanEvent, label};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -73,7 +73,7 @@ impl<W: Write> Output<W> {
         if self.format == Format::Json {
             serde_json::to_writer(
                 &mut self.writer,
-                &json!({"schema_version": 1, "type": kind, "data": data}),
+                &json!({"schema_version": 2, "type": kind, "data": data}),
             )?;
             writeln!(self.writer)?;
             self.writer.flush()?;
@@ -91,7 +91,7 @@ impl<W: Write> Output<W> {
         if self.format == Format::Json {
             self.event(
                 "error",
-                located(json!({ "path": path, "message": message }), lines),
+                located(json!({ "file": path, "message": message }), lines),
             )?;
         } else {
             if self.format == Format::Sarif {
@@ -107,18 +107,20 @@ impl<W: Write> Output<W> {
         Ok(())
     }
 
-    pub(crate) fn selected(&mut self, source: &Source) -> Result<()> {
-        let bytes = source.text.len();
+    pub(crate) fn selected(&mut self, candidate: &Candidate) -> Result<()> {
+        let bytes = candidate.bytes();
         match self.format {
             Format::Json => {
-                let lines = source.focus.as_ref().map(|focus| focus.lines);
-                self.event(
-                    "selected",
-                    located(json!({"path": source.path, "bytes": bytes}), lines),
-                )?;
+                let mut data = serde_json::to_value(candidate)?;
+                data["bytes"] = json!(bytes);
+                self.event("selected", data)?;
             }
-            Format::Sarif => self.sarif.artifact(&source.path, bytes),
-            Format::Text => writeln!(self.writer, "{}\t{bytes} bytes", source.label())?,
+            Format::Sarif => {
+                if let Some(file) = &candidate.file {
+                    self.sarif.artifact(file, bytes);
+                }
+            }
+            Format::Text => writeln!(self.writer, "{}\t{bytes} bytes", candidate.label())?,
         }
         Ok(())
     }
@@ -126,8 +128,7 @@ impl<W: Write> Output<W> {
     pub(crate) fn scan_event(&mut self, event: ScanEvent) -> Result<()> {
         match event {
             ScanEvent::Result {
-                path,
-                lines,
+                candidate,
                 assessment,
             } => {
                 self.summary.evaluated += 1;
@@ -147,12 +148,27 @@ impl<W: Write> Output<W> {
                 };
                 match self.format {
                     Format::Json => {
-                        let data = json!({"path": path, "assessment": assessment});
-                        self.event("result", located(data, lines))?;
+                        let mut data = serde_json::to_value(&candidate)?;
+                        data["assessment"] = raw_assessment(&assessment);
+                        self.event("result", data)?;
                     }
-                    Format::Sarif => self.sarif.result(&path, lines, &assessment),
+                    Format::Sarif => self.sarif.result(&candidate, &assessment),
                     Format::Text if assessment.outcome != Outcome::NoMatch => {
-                        writeln!(self.writer, "{}\t{outcome}", label(&path, lines))?;
+                        if assessment.outcome == Outcome::Match {
+                            let probability = assessment
+                                .probabilities
+                                .get(&Outcome::Match)
+                                .copied()
+                                .unwrap_or(0.0);
+                            writeln!(
+                                self.writer,
+                                "{}\t{:.0}% match",
+                                candidate.label(),
+                                probability * 100.0
+                            )?;
+                        } else {
+                            writeln!(self.writer, "{}\t{outcome}", candidate.label())?;
+                        }
                         self.writer.flush()?;
                     }
                     Format::Text => {}
@@ -164,7 +180,7 @@ impl<W: Write> Output<W> {
                     let message = "skipped binary file";
                     self.sarif.notification("note", Some(&path), lines, message);
                 }
-                let data = json!({"path": path, "reason": "binary"});
+                let data = json!({"file": path, "reason": "binary"});
                 self.event("skipped", located(data, lines))?;
             }
             ScanEvent::Error(error) => {
@@ -208,7 +224,18 @@ impl<W: Write> Output<W> {
     }
 }
 
-/// Ranged records add `start_line` and `end_line`, counted from 1; whole-file records are unchanged.
+pub(crate) fn raw_assessment(assessment: &Assessment) -> Value {
+    json!({
+        "choice": assessment.choice,
+        "confidence": assessment.confidence,
+        "probabilities": assessment.probabilities,
+        "model": assessment.model,
+        "input_tokens": assessment.input_tokens,
+        "output_tokens": assessment.output_tokens,
+    })
+}
+
+/// Errors and skips retain the requested lines when no validated candidate region is available.
 fn located(mut data: Value, lines: Option<LineRange>) -> Value {
     if let Some(lines) = lines {
         data["start_line"] = json!(lines.start);
@@ -221,10 +248,32 @@ fn located(mut data: Value, lines: Option<LineRange>) -> Value {
 mod tests {
     use std::collections::BTreeMap;
 
-    use ev_grep_core::{Assessment, LineRange, Outcome, ScanEvent, Uncertainty};
+    use ev_grep_core::{
+        Assessment, Candidate, LineRange, Outcome, Position, Region, ScanEvent, Uncertainty,
+    };
     use serde_json::{Value, json};
 
     use super::{Format, Output};
+
+    fn candidate(path: &str, lines: Option<LineRange>) -> Candidate {
+        let lines = lines.unwrap_or(LineRange { start: 1, end: 1 });
+        Candidate {
+            file: Some(path.into()),
+            text: "\n".repeat(lines.end - lines.start + 1),
+            range: Region {
+                start: Position {
+                    line: lines.start - 1,
+                    column: 0,
+                },
+                end: Position {
+                    line: lines.end,
+                    column: 0,
+                },
+                byte_offset: None,
+            },
+            context: None,
+        }
+    }
 
     fn assessment(outcome: Outcome, reason: Option<Uncertainty>, confidence: f64) -> Assessment {
         Assessment {
@@ -248,8 +297,7 @@ mod tests {
         let mut output = Output::new(Vec::new(), Format::Json, false);
         output.summary.selected = 2;
         output.scan_event(ScanEvent::Result {
-            path: "a.py".into(),
-            lines: Some(LineRange { start: 3, end: 9 }),
+            candidate: candidate("a.py", Some(LineRange { start: 3, end: 9 })),
             assessment: Assessment {
                 outcome: Outcome::Uncertain,
                 reason: Some(Uncertainty::LowConfidence),
@@ -272,12 +320,12 @@ mod tests {
             .lines()
             .map(serde_json::from_str)
             .collect::<Result<_, _>>()?;
-        assert_eq!(records[0]["data"]["path"], "a.py");
-        assert_eq!(records[0]["data"]["start_line"], 3);
-        assert_eq!(records[0]["data"]["end_line"], 9);
+        assert_eq!(records[0]["data"]["file"], "a.py");
+        assert_eq!(records[0]["data"]["range"]["start"]["line"], 2);
+        assert_eq!(records[0]["data"]["range"]["end"]["line"], 9);
         assert!(records[1]["data"].get("start_line").is_none());
         assert_eq!(records[0]["data"]["assessment"]["choice"], "no_match");
-        assert_eq!(records[0]["data"]["assessment"]["outcome"], "uncertain");
+        assert!(records[0]["data"]["assessment"].get("outcome").is_none());
         assert_eq!(records[2]["type"], "summary");
         assert_eq!(records[2]["data"]["errors"], 1);
         Ok(())
@@ -307,8 +355,7 @@ mod tests {
             ),
         ] {
             output.scan_event(ScanEvent::Result {
-                path: path.into(),
-                lines,
+                candidate: candidate(path, lines),
                 assessment,
             })?;
         }
@@ -343,14 +390,17 @@ mod tests {
         );
         assert_eq!(
             location(0)["region"],
-            json!({"startLine": 20, "endLine": 56})
+            json!({"startLine": 20, "startColumn": 1, "endLine": 57, "endColumn": 1})
         );
         assert_eq!(results[1]["level"], "note");
         assert_eq!(
             location(1)["artifactLocation"]["uri"],
             "src/odd%3A12%20x.py"
         );
-        assert_eq!(location(1)["region"], json!({"startLine": 1}));
+        assert_eq!(
+            location(1)["region"],
+            json!({"startLine": 1, "startColumn": 1, "endLine": 2, "endColumn": 1})
+        );
         assert_eq!(
             results[1]["message"]["text"],
             "Catches a database failure (ev-grep uncertain: low confidence 0.62)"

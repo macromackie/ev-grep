@@ -5,7 +5,8 @@
 | Concurrent requests | 4 by default; `--jobs 1..256` |
 | Connection timeout | 10 seconds |
 | Full request timeout | 60 seconds |
-| File | 64 KiB |
+| File, stdin text, or candidate source including context | 64 KiB |
+| Encoded candidate JSON line | 512 KiB |
 | Query | 8 KiB |
 | Encoded request | 96 KiB |
 | Response | 64 KiB |
@@ -16,8 +17,10 @@ A [line range](./cli.md#search-part-of-a-file) must lie within its file. A range
 
 Binary detection checks the first 8 KiB before enforcing the file-size limit, then checks the rest of an eligible file. A large binary without an early NUL byte may therefore produce a size error.
 
+Stdin and JSON candidates containing NUL bytes are errors. Empty stdin is one text candidate.
+
 ## Context
 
-Each assessment sees one file, or part of one with the rest of that file as context. A question about architecture, relationships between files, or whether a diff introduced a bug may need more context than ev-grep provides.
+Each assessment sees the supplied candidate and any explicit file context. A question about architecture, relationships between files, or whether a diff introduced a bug may need more context than ev-grep provides.
 
 Use `uncertain` results as a reason to investigate. A `no_match` is a model assessment, not proof that a codebase has no issues.

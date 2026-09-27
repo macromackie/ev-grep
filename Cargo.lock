@@ -283,21 +283,23 @@ dependencies = [
 
 [[package]]
 name = "ev-grep"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
  "ev-grep-core",
  "ev-grep-jev",
+ "futures-util",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
 name = "ev-grep-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -310,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "ev-grep-jev"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "ev-grep-core",

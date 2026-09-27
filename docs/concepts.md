@@ -1,8 +1,8 @@
 # Concepts
 
-A query describes behavior you want to find. ev-grep reads each selected file and asks Jev whether it matches.
+A query describes what you want to find. ev-grep asks Jev about each selected file, text range, or stdin candidate.
 
-The same query accompanies each file; files do not share context.
+The same query accompanies each candidate; assessments do not share context.
 
 ## File context
 
@@ -19,6 +19,12 @@ context and judges what the selected lines do, including what same-file helpers 
 file that the lines don't use does not make them match. A range of changed lines asks what that code does now; it
 still does not show whether the change introduced it. [Use with other tools](./pipelines.md) shows how to get ranges
 from `git diff` or ast-grep.
+
+## Syntax candidates
+
+Use ast-grep to select functions, types, or other syntax, then pass its JSONL to `--candidates -`.
+ev-grep assesses those exact regions. It does not generate matchers or ask the model to find line numbers.
+Candidate records may supply complete file context explicitly; paths in records are never opened.
 
 ## Decisions
 

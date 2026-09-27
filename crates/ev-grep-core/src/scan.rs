@@ -1,9 +1,9 @@
 use std::future::Future;
 
 use anyhow::{Result, ensure};
-use futures_util::{StreamExt, stream};
+use futures_util::{Stream, StreamExt, stream};
 
-use crate::{Assessment, FileError, LineRange, Source, SourceRead, Target, read_target};
+use crate::{Assessment, Candidate, FileError, Input, LineRange, Loaded, Source, Target};
 
 pub trait Evaluator: Sync {
     fn assess(
@@ -32,8 +32,7 @@ pub trait Evaluator: Sync {
 #[derive(Debug)]
 pub enum ScanEvent {
     Result {
-        path: String,
-        lines: Option<LineRange>,
+        candidate: Candidate,
         assessment: Assessment,
     },
     Skipped {
@@ -59,28 +58,53 @@ pub async fn scan_with_jobs(
     query: &str,
     evaluator: &impl Evaluator,
     jobs: usize,
+    emit: impl FnMut(ScanEvent) -> Result<()>,
+) -> Result<()> {
+    scan_inputs(
+        stream::iter(targets.into_iter().map(Input::File)),
+        query,
+        evaluator,
+        jobs,
+        emit,
+    )
+    .await
+}
+
+/// All input modes share this bounded assessment pool.
+pub async fn scan_inputs(
+    inputs: impl Stream<Item = Input>,
+    query: &str,
+    evaluator: &impl Evaluator,
+    jobs: usize,
     mut emit: impl FnMut(ScanEvent) -> Result<()>,
 ) -> Result<()> {
     ensure!((1..=256).contains(&jobs), "jobs must be between 1 and 256");
-    let mut pending = stream::iter(targets)
-        .map(|target| async move {
-            let path = target.path.display().to_string();
-            let lines = target.lines;
-            let assessment = match read_target(&target) {
-                Ok(SourceRead::Binary) => return ScanEvent::Skipped { path, lines },
-                Ok(SourceRead::Text(source)) => evaluator.assess(query, &source).await,
-                Err(error) => Err(error),
+    let pending = inputs
+        .map(|input| async move {
+            let candidate = match input.load() {
+                Ok(Loaded::Candidate(candidate)) => candidate,
+                Ok(Loaded::Binary(target)) => {
+                    return ScanEvent::Skipped {
+                        path: target.path.display().to_string(),
+                        lines: target.lines,
+                    };
+                }
+                Err(error) => return ScanEvent::Error(error),
             };
-            match assessment {
+            match evaluator.assess(query, &candidate.source()).await {
                 Ok(assessment) => ScanEvent::Result {
-                    path,
-                    lines,
+                    candidate,
                     assessment,
                 },
-                Err(error) => ScanEvent::Error(FileError::new(&path, lines, format!("{error:#}"))),
+                Err(error) => ScanEvent::Error(FileError::new(
+                    candidate.file.as_deref().unwrap_or("<stdin>"),
+                    Some(candidate.range.lines()),
+                    format!("{error:#}"),
+                )),
             }
         })
         .buffer_unordered(jobs);
+    futures_util::pin_mut!(pending);
     while let Some(event) = pending.next().await {
         emit(event)?;
     }

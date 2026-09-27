@@ -1,6 +1,6 @@
 use std::{fs::File, io, path::PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use ev_grep_core::{MAX_QUERY_BYTES, read_text};
 use ev_grep_jev::Provider;
@@ -8,7 +8,7 @@ use ev_grep_jev::Provider;
 #[derive(Debug, Parser)]
 #[command(
     version,
-    about = "Find files by meaning with Jev",
+    about = "Search text by meaning with Jev",
     override_usage = "ev-grep [OPTIONS] <QUERY> [PATHS]...\n       ev-grep [OPTIONS] --query-file <FILE> [PATHS]..."
 )]
 pub(crate) struct Cli {
@@ -20,6 +20,14 @@ pub(crate) struct Cli {
     /// Read one multiline query from FILE, or from stdin when FILE is '-'.
     #[arg(short = 'f', long, value_name = "FILE")]
     pub query_file: Option<PathBuf>,
+
+    /// Read stdin as one text candidate.
+    #[arg(long, conflicts_with_all = ["candidates", "glob"])]
+    pub stdin: bool,
+
+    /// Read candidate JSON Lines from FILE, or stdin with '-'.
+    #[arg(long, value_name = "FILE", conflicts_with = "glob")]
+    pub candidates: Option<PathBuf>,
 
     /// Include or exclude paths using gitignore globs; prefix exclusions with '!'.
     #[arg(short = 'g', long, value_name = "GLOB")]
@@ -68,6 +76,20 @@ fn confidence(value: &str) -> std::result::Result<f64, String> {
 
 impl Cli {
     pub(crate) fn query_and_targets(&self) -> Result<(String, Vec<String>)> {
+        let piped = self.stdin || self.candidates.is_some();
+        let source_stdin = self.stdin
+            || self
+                .candidates
+                .as_ref()
+                .is_some_and(|path| path.as_os_str() == "-");
+        ensure!(
+            !(source_stdin
+                && self
+                    .query_file
+                    .as_ref()
+                    .is_some_and(|path| path.as_os_str() == "-")),
+            "stdin cannot contain both query and source"
+        );
         let (query, paths) = if let Some(path) = &self.query_file {
             let query = if path.as_os_str() == "-" {
                 read_text(io::stdin().lock(), MAX_QUERY_BYTES)?
@@ -86,7 +108,11 @@ impl Cli {
                 .context("provide a query or --query-file")?;
             (read_text(query.as_bytes(), MAX_QUERY_BYTES)?, paths)
         };
-        let targets = if paths.is_empty() {
+        ensure!(
+            !piped || paths.is_empty(),
+            "stdin and candidate inputs cannot be combined with paths"
+        );
+        let targets = if paths.is_empty() && !piped {
             vec![".".to_owned()]
         } else {
             paths.to_vec()

@@ -37,11 +37,12 @@ Run it from the repository root on a clean checkout of the branch, so the line n
 ```sh
 ast-grep scan --json=stream src/ --inline-rules '{id: catches, language: python,
   rule: {kind: function_definition, has: {kind: except_clause, stopBy: end}}}' \
-  | jq -r '"\(.file):\(.range.start.line + 1)-\(.range.end.line + 1)"' \
-  | tr '\n' '\0' | xargs -0 -r ev-grep 'Catches a database failure and returns an empty result'
+  | ev-grep 'Catches a database failure and returns an empty result' --candidates - --json
 ```
 
-The rule selects each Python function that contains an `except` clause. ev-grep then assesses each function, with the rest of its file as context. ast-grep's JSON counts lines from 0, hence the `+ 1`.
+The rule selects Python functions containing an `except` clause. Each candidate keeps its exact text and source range.
+Only candidate text is sent unless you explicitly supply `context`. Use `set -o pipefail` in a script to detect upstream
+failures too. An empty candidate stream never falls back to searching the current directory.
 
 ## Narrow a review in two passes
 
@@ -52,13 +53,9 @@ ev-grep 'Performs database operations or handles their failures' src/ \
 
 Terminal output lists each match or uncertain result as a location, a tab, and the outcome. `cut -f1` keeps the location, which ev-grep accepts again, ranges included. The first query keeps candidates, including uncertainty. The second looks for a specific violation. Inspect its matches and uncertain results before writing a review comment. Neither pass establishes whether a change introduced the behavior.
 
-To pass on matches only, drop uncertain results with JSON output:
-
-```sh
-ev-grep 'Performs database operations or handles their failures' src/ --json \
-  | jq -r 'select(.type == "result" and .data.assessment.outcome == "match") | .data
-           | .path + (if .start_line then ":\(.start_line)-\(.end_line)" else "" end)'
-```
+Use [JSON score filters](./output.md#select-by-score) to choose a different threshold without another model request.
+To run a second question, write those candidate records to a file and pass `--candidates candidates.jsonl`.
+Keep the first run's exit status and summary alongside the filtered records.
 
 ## Upload results to GitHub code scanning
 
@@ -92,15 +89,5 @@ jobs:
 
 ## Pitfalls
 
-- ev-grep reads stdin only with `-f -`, and only as the query. `cat file.py | ev-grep 'query'` does not search the piped text; with no paths, ev-grep searches the current directory.
+- Choose stdin explicitly: `--stdin` for text, `--candidates -` for JSONL, or `-f -` for the query.
 - xargs may split a long list into several ev-grep runs, each with its own summary, JSON stream, and exit code. xargs exits `123` when any run exits with 1 to 125, which includes ev-grep's "no matches" (`1`) and "uncertain" (`3`). Read ev-grep's [summaries and exit codes](./output.md#exit-codes) rather than xargs's status.
-# Confidence
-
-Keep uncertain files when a later reviewer can investigate them:
-
-```sh
-ev-grep 'Performs database operations' src/ --min-confidence 0.9 --json > results.jsonl
-jq -r 'select(.type == "result" and .data.assessment.outcome != "no_match") | .data.path' results.jsonl
-```
-
-For a narrower search, select only `match` outcomes. JSON always includes every assessed file, so you can apply a different policy without repeating model calls. Read the command's exit status and final summary before treating either selection as complete.

@@ -1,4 +1,5 @@
 mod cli;
+mod inputs;
 mod output;
 mod sarif;
 
@@ -6,8 +7,9 @@ use std::{io, process::ExitCode};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ev_grep_core::{ScanEvent, SourceRead, discover, read_target, scan_with_jobs};
+use ev_grep_core::{Input, Loaded, ScanEvent, scan_inputs};
 use ev_grep_jev::Jev;
+use futures_util::{StreamExt, stream};
 use serde_json::json;
 
 use cli::Cli;
@@ -47,28 +49,34 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
         &query,
         json!({"provider": cli.provider, "requested_model": model, "min_confidence": cli.min_confidence, "dry_run": cli.dry_run, "jobs": cli.jobs}),
     )?;
-    let found = discover(&arguments, &cli.glob)?;
-    output.summary.selected = found.targets.len();
-    for error in found.errors {
+    let (mut inputs, errors) = inputs::select(cli, &arguments).await?;
+    for error in errors {
         output.error(Some(&error.path), error.lines, &error.message)?;
     }
     if cli.dry_run {
-        for target in found.targets {
-            let path = target.path.display().to_string();
-            match read_target(&target) {
-                Ok(SourceRead::Text(source)) => output.selected(&source)?,
-                Ok(SourceRead::Binary) => output.scan_event(ScanEvent::Skipped {
-                    path,
+        while let Some(input) = inputs.next().await {
+            output.summary.selected += 1;
+            match input.load() {
+                Ok(Loaded::Candidate(candidate)) => output.selected(&candidate)?,
+                Ok(Loaded::Binary(target)) => output.scan_event(ScanEvent::Skipped {
+                    path: target.path.display().to_string(),
                     lines: target.lines,
                 })?,
-                Err(error) => output.error(Some(&path), target.lines, &format!("{error:#}"))?,
+                Err(error) => output.error(Some(&error.path), error.lines, &error.message)?,
             }
         }
         return Ok(());
     }
-    if found.targets.is_empty() {
-        return Ok(());
-    }
+    let first = loop {
+        match inputs.next().await {
+            None => return Ok(()),
+            Some(Input::Error(error)) => {
+                output.summary.selected += 1;
+                output.error(Some(&error.path), error.lines, &error.message)?;
+            }
+            Some(input) => break input,
+        }
+    };
     let key_name = cli.provider.key_variable();
     let key = std::env::var(key_name)
         .with_context(|| format!("set {key_name} for provider {}", cli.provider))?;
@@ -79,12 +87,15 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
         cli.endpoint.as_deref().unwrap_or(cli.provider.endpoint()),
     )?
     .with_min_confidence(cli.min_confidence)?;
-    scan_with_jobs(
-        found.targets,
+    scan_inputs(
+        stream::once(std::future::ready(first)).chain(inputs),
         &query,
         &jev,
         usize::from(cli.jobs),
-        |event| output.scan_event(event),
+        |event| {
+            output.summary.selected += 1;
+            output.scan_event(event)
+        },
     )
     .await
 }

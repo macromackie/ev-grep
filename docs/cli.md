@@ -35,7 +35,34 @@ ev-grep -f query.txt src/
 ev-grep -f - src/ < query.txt
 ```
 
-The whole query file is one query, even if it spans several lines. With `-f`, all positional arguments are paths. Stdin is reserved for the query; source files are read from disk.
+The whole query file is one query, even if it spans several lines. With `-f`, all positional arguments are paths. Do not combine `-f -` with another stdin input.
+
+## Search text from stdin
+
+```sh
+cat src/users.py | ev-grep 'Hides a database failure' --stdin
+```
+
+The complete stream is one candidate. Use a query argument or a query file on disk. Stdin inputs cannot be combined
+with paths or globs. Empty text is still one candidate; empty candidate streams select nothing.
+
+## Search candidates
+
+```sh
+ast-grep run --kind function_declaration --lang ts --json=stream src/ \
+  | ev-grep 'Retries a failed request' --candidates - --json
+```
+
+Each JSON line is one candidate. `--candidates candidates.jsonl` reads from a file instead. Records use ast-grep's
+`file`, `range`, and `text` fields. Extra metadata is ignored. A JSON array is not accepted; use `--json=stream`.
+
+Only the supplied text is assessed. ev-grep never opens paths from candidate records. To include file context, add
+`context` containing the complete original file; its selected slice must equal `text`. Positions count lines and
+Unicode characters from zero, with an exclusive end. Optional byte offsets count UTF-8 bytes.
+
+Each record is assessed independently, including repeated ranges in the same file. Malformed records produce errors;
+valid records still run. An oversized record or an unreadable stream stops input, retaining earlier results.
+`--stdin`, `--candidates`, and path searches are separate input modes.
 
 ## Preview a search
 
@@ -63,6 +90,8 @@ ev-grep [OPTIONS] --query-file <FILE> [PATHS]...
 | Option | Meaning |
 | --- | --- |
 | `-f, --query-file FILE` | Read one query from a file; `-` reads stdin |
+| `--stdin` | Assess stdin as one text candidate |
+| `--candidates FILE` | Read candidate JSON Lines; `-` reads stdin |
 | `-g, --glob GLOB` | Filter paths; repeat to add filters, prefix with `!` to exclude |
 | `--provider PROVIDER` | `openrouter` (default) or `typesafe` |
 | `--model MODEL` | A supported pinned model for the selected provider |

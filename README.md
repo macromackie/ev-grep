@@ -14,7 +14,7 @@ The installer puts `ev-grep` in `~/.local/bin`. Add that directory to your `PATH
 You can also install a specific release with [mise](https://mise.jdx.dev/):
 
 ```sh
-mise use -g github:macromackie/ev-grep@0.2.3
+mise use -g github:macromackie/ev-grep@0.4.0
 ```
 
 Archives and checksums are on the [releases page](https://github.com/macromackie/ev-grep/releases).
@@ -44,7 +44,7 @@ from `rg`, `git diff`, and ast-grep.
 Example output, showing only stdout:
 
 ```text
-src/users.py     match
+src/users.py     92% match
 src/actions.py   uncertain
 ```
 
@@ -52,7 +52,18 @@ src/actions.py   uncertain
 Terminal output omits `no_match` files and writes a count summary to stderr. Use `--json` to include every assessment.
 Use `--sarif` to write a SARIF log for code scanning tools such as GitHub's.
 
-Each file is evaluated on its own. ev-grep does not read related files for context or run the code. Results can be
+Search a pipe with `cat src/users.py | ev-grep 'Hides a database failure' --stdin`.
+For syntax selections, pass ast-grep's JSON Lines directly:
+
+```sh
+ast-grep run --kind function_declaration --lang ts --json=stream src/ \
+  | ev-grep 'Retries a failed request' --candidates - --json
+```
+
+JSON results contain exact text, source ranges, and probabilities for match, no-match, and uncertainty.
+The [output guide](docs/output.md) shows score filters and completeness checks.
+
+Each candidate is evaluated on its own. ev-grep does not read related files for context or run the code. Results can be
 wrong; use them to decide what to inspect. Request failures are reported as errors, not as `no_match`.
 
 See the [documentation](docs/README.md) for file filters, provider configuration, exit codes, JSONL output, and SARIF output.

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.4.0
+
+- Search raw text with `--stdin`, or pass ast-grep JSON Lines with `--candidates FILE` (`-` reads stdin).
+- Keep exact candidate text and source ranges in JSONL v2. Optional full-file context is supplied explicitly;
+  candidate paths are never opened. JSON includes all three model probabilities and raw confidence.
+- Terminal matches show their match probability. SARIF preserves candidate columns, including Unicode positions.
+- Clarify the search prompt's distinction between missing helper behavior and evidence of absence.
+
 ## v0.3.0
 
 - Set `--min-confidence` to control which search results remain uncertain. JSON retains the original answer and score.

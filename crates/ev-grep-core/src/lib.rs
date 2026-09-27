@@ -1,12 +1,16 @@
 //! File selection and semantic assessments, independent of providers and terminal output.
 
+mod candidate;
 mod discovery;
+mod region;
 mod scan;
 mod source;
 mod target;
 
+pub use candidate::{Candidate, Input, Loaded};
 pub use discovery::{Discovery, discover};
-pub use scan::{Evaluator, ScanEvent, scan, scan_with_jobs};
+pub use region::{Position, Region};
+pub use scan::{Evaluator, ScanEvent, scan, scan_inputs, scan_with_jobs};
 pub use source::{
     Focus, MAX_FILE_BYTES, MAX_QUERY_BYTES, Source, SourceRead, read_source, read_target, read_text,
 };
