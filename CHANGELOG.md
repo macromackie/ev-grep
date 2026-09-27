@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.1
+
+- Retry temporary HTTP failures up to three attempts within the request timeout.
+- Include upstream request IDs in HTTP errors when available, to help diagnose failed requests.
+
 ## v0.4.0
 
 - Search raw text with `--stdin`, or pass ast-grep JSON Lines with `--candidates FILE` (`-` reads stdin).

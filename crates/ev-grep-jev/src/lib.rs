@@ -1,6 +1,7 @@
 //! Jev's typed decision protocol over OpenRouter or direct TypeSafe HTTP.
 
 mod config;
+mod http;
 mod protocol;
 
 pub use config::Provider;
@@ -86,32 +87,7 @@ impl Jev {
             body.len() <= 96 * 1024,
             "encoded request exceeds 98304 bytes; context was not truncated"
         );
-        let mut response = self
-            .client
-            .post(&self.endpoint)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body)
-            .send()
-            .await
-            .map_err(|error| error.without_url())
-            .context("Jev request failed")?;
-        ensure!(
-            response.status().is_success(),
-            "Jev returned HTTP {}; no assessment was recorded",
-            response.status().as_u16()
-        );
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|error| error.without_url())?
-        {
-            ensure!(
-                bytes.len() + chunk.len() <= 64 * 1024,
-                "Jev response exceeds 65536 bytes"
-            );
-            bytes.extend_from_slice(&chunk);
-        }
+        let bytes = http::post(&self.client, &self.endpoint, body).await?;
         protocol::assessment(&bytes, &self.model)
     }
 }

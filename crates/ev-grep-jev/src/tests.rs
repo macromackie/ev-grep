@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ev_grep_core::{Evaluator, Focus, LineRange, Outcome, Source, Uncertainty};
 use serde_json::{Value, json};
 use wiremock::{
@@ -206,4 +206,70 @@ fn endpoint_rejects_non_http_or_credential_bearing_urls() {
             .is_err()
         );
     }
+}
+
+#[tokio::test]
+async fn transient_failures_recover_but_retries_are_bounded() -> Result<()> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    let server = MockServer::start().await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let seen = attempts.clone();
+    let model = Provider::OpenRouter.default_model();
+    Mock::given(path("/recover"))
+        .respond_with(move |_: &wiremock::Request| {
+            if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(520).insert_header("Retry-After", "0")
+            } else {
+                ResponseTemplate::new(200).set_body_json(response(model))
+            }
+        })
+        .mount(&server)
+        .await;
+    let source = Source {
+        path: "cache.ts".into(),
+        text: "return cached;".into(),
+        focus: None,
+    };
+    let recovering = Jev::connect(&format!("{}/recover", server.uri()), model, "test-key")?;
+    assert_eq!(
+        recovering
+            .assess("Returns cached values", &source)
+            .await?
+            .choice,
+        Outcome::Match
+    );
+
+    Mock::given(path("/down"))
+        .respond_with(
+            ResponseTemplate::new(520)
+                .insert_header("Retry-After", "0")
+                .insert_header("cf-ray", "example-SJC")
+                .set_body_string("private provider response"),
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+    let down = Jev::connect(&format!("{}/down", server.uri()), model, "test-key")?;
+    let error = down
+        .assess("Returns cached values", &source)
+        .await
+        .err()
+        .context("expected failure")?
+        .to_string();
+    assert!(error.contains("520") && error.contains("cf-ray=example-SJC"));
+    assert!(!error.contains("private provider response"));
+
+    Mock::given(path("/unauthorized"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let unauthorized = Jev::connect(&format!("{}/unauthorized", server.uri()), model, "test-key")?;
+    assert!(unauthorized.assess("query", &source).await.is_err());
+    server.verify().await;
+    Ok(())
 }
