@@ -14,7 +14,7 @@ The installer puts `ev-grep` in `~/.local/bin`. Add that directory to your `PATH
 You can also install a specific release with [mise](https://mise.jdx.dev/):
 
 ```sh
-mise use -g github:macromackie/ev-grep@0.4.1
+mise use -g github:macromackie/ev-grep@0.4.2
 ```
 
 Archives and checksums are on the [releases page](https://github.com/macromackie/ev-grep/releases).
@@ -51,6 +51,14 @@ src/actions.py   uncertain
 `match` means the model judges that the file matches the query. `uncertain` means it lacks enough context or confidence.
 Terminal output omits `no_match` files and writes a count summary to stderr. Use `--json` to include every assessment.
 Use `--sarif` to write a SARIF log for code scanning tools such as GitHub's.
+
+Put higher match probabilities first with `--sort score`:
+
+```sh
+ev-grep 'Retries failed requests with a delay' src/ --sort score
+```
+
+Sorting waits for the search to finish and makes no additional model requests. The default streams results as they arrive.
 
 Search a pipe with `cat src/users.py | ev-grep 'Hides a database failure' --stdin`.
 For syntax selections, pass ast-grep's JSON Lines directly:

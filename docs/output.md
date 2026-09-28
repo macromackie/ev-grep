@@ -10,6 +10,9 @@ src/actions.py:4-12   uncertain
 The percentage is the model's probability for `match`. It is not the probability that a review is correct.
 Nonmatches are omitted. Counts and errors go to stderr.
 
+Use `--sort score` to put higher match probabilities first. Results wait until the search finishes; errors remain
+immediate. Sorting preserves the model's scores and keeps uncertain results. It makes no extra model requests.
+
 `--min-confidence` controls routing (default `0.8`). Below that provider confidence, an answer stays uncertain.
 An explicit uncertain answer stays uncertain at any threshold. JSON preserves the original scores.
 
@@ -55,15 +58,16 @@ negative from missing context. `confidence` is the provider's separate confidenc
 
 | Type | Data |
 | --- | --- |
-| `begin` | Provider, requested model, confidence threshold, dry-run flag, jobs |
+| `begin` | Provider, requested model, confidence threshold, dry-run flag, jobs, sort order |
 | `selected` | Dry run: candidate `file`, `range`, `text`, optional `context`, and input `bytes` |
 | `result` | Candidate fields and raw `assessment` |
 | `skipped` | File, optional requested lines, and binary reason |
 | `error` | File or input identifier, optional requested lines, and message |
 | `summary` | Selected, evaluated, match, no-match, uncertain, skipped, and error counts; dry-run flag |
 
-Results arrive as requests finish. All successful assessments appear, including nonmatches. Completed runs end with
+Results arrive as requests finish, or in descending match probability with `--sort score`. All successful assessments appear, including nonmatches. Completed runs end with
 one summary. Interrupted runs may not. Argument parsing errors print usage and exit 2 before starting the stream.
+Sorted runs buffer results, so interruption may leave only configuration, errors, and skips.
 
 ## Select by score
 

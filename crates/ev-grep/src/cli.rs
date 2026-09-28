@@ -5,6 +5,8 @@ use clap::Parser;
 use ev_grep_core::{MAX_QUERY_BYTES, read_text};
 use ev_grep_jev::Provider;
 
+use crate::output::Sort;
+
 #[derive(Debug, Parser)]
 #[command(
     version,
@@ -52,6 +54,10 @@ pub(crate) struct Cli {
     /// Route answers below this confidence to uncertain (0 to 1).
     #[arg(long, default_value_t = ev_grep_jev::MIN_CONFIDENCE, value_parser = confidence)]
     pub min_confidence: f64,
+
+    /// Result order: none streams immediately; score waits and sorts by match probability.
+    #[arg(long, value_enum, default_value_t = Sort::None)]
+    pub sort: Sort,
 
     /// Emit versioned JSON Lines, including nonmatches, errors, and a final summary.
     #[arg(long)]

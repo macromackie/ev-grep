@@ -54,5 +54,8 @@ to four requests in flight by default (`--jobs` changes the limit). Use `--dry-r
 When a request finishes, the next file takes its place. JSONL includes every result; terminal output lists matches
 and uncertain files.
 
+With `--sort score`, ev-grep waits for completion and orders results by match probability. Each assessment stays
+independent; sorting does not ask Jev to choose one winner among matching candidates.
+
 Requests use your provider account and may incur charges. See [Providers](./providers.md) for configuration,
 [Request limits](./limits.md) for bounds, and [Benchmarks](./benchmarks.md) for measured timings.

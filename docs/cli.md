@@ -72,6 +72,19 @@ ev-grep 'Performs database operations' src/ --dry-run
 
 A dry run lists selected text files and line ranges with the size of each file. It makes no API requests and needs no key.
 
+## Sort results
+
+```sh
+ev-grep 'Retries failed requests with a delay' src/ --sort score
+```
+
+`--sort score` waits for the search to finish and lists the highest match probabilities first. Ties sort by path,
+then numeric source position. It works with text, JSONL, and SARIF. Scores, uncertainty, and exit codes stay the same.
+The default, `--sort none`, emits results as requests finish.
+
+Sorting buffers results in memory and makes no extra model requests. JSONL errors and skips are still reported as
+they occur. Dry runs have no scores and keep their selection order.
+
 ## Limit concurrency
 
 ```sh
@@ -97,6 +110,7 @@ ev-grep [OPTIONS] --query-file <FILE> [PATHS]...
 | `--model MODEL` | A supported pinned model for the selected provider |
 | `-j, --jobs N` | Maximum concurrent requests (default 4) |
 | `--min-confidence N` | Route answers below N to uncertain; 0 to 1 (default 0.8) |
+| `--sort ORDER` | `none` streams results (default); `score` sorts by descending match probability |
 | `--json` | Write versioned JSON Lines to stdout |
 | `--sarif` | Write one SARIF 2.1.0 log to stdout for code scanning tools; cannot be combined with `--json` |
 | `--dry-run` | List files without credentials or API requests |

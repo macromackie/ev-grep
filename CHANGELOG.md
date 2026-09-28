@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.2
+
+- Add `--sort score` to order results by match probability. Streaming remains the default; sorting makes no extra model requests.
+- Refine Jev instructions to make decisive judgments from visible code while retaining uncertainty for missing definitions. Queries about declarations can match declarations.
+
 ## v0.4.1
 
 - Retry temporary HTTP failures up to three attempts within the request timeout.

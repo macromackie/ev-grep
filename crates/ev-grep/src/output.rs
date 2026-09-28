@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 
 use anyhow::Result;
+use clap::ValueEnum;
 use ev_grep_core::{Assessment, Candidate, LineRange, Outcome, ScanEvent, label};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -12,6 +13,13 @@ pub(crate) enum Format {
     Text,
     Json,
     Sarif,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Sort {
+    None,
+    Score,
 }
 
 #[derive(Default, Serialize)]
@@ -44,15 +52,19 @@ pub(crate) struct Output<W> {
     writer: W,
     format: Format,
     sarif: Sarif,
+    sort: Sort,
+    pending: Vec<(Candidate, Assessment)>,
     pub summary: Summary,
 }
 
 impl<W: Write> Output<W> {
-    pub(crate) fn new(writer: W, format: Format, dry_run: bool) -> Self {
+    pub(crate) fn new(writer: W, format: Format, dry_run: bool, sort: Sort) -> Self {
         Self {
             writer,
             format,
             sarif: Sarif::default(),
+            sort,
+            pending: Vec::new(),
             summary: Summary {
                 dry_run,
                 ..Summary::default()
@@ -132,46 +144,17 @@ impl<W: Write> Output<W> {
                 assessment,
             } => {
                 self.summary.evaluated += 1;
-                let outcome = match assessment.outcome {
-                    Outcome::Match => {
-                        self.summary.matches += 1;
-                        "match"
+                match assessment.outcome {
+                    Outcome::Match => self.summary.matches += 1,
+                    Outcome::NoMatch => self.summary.no_match += 1,
+                    Outcome::Uncertain => self.summary.uncertain += 1,
+                }
+                if self.sort == Sort::Score {
+                    if self.format == Format::Json || assessment.outcome != Outcome::NoMatch {
+                        self.pending.push((candidate, assessment));
                     }
-                    Outcome::NoMatch => {
-                        self.summary.no_match += 1;
-                        "no_match"
-                    }
-                    Outcome::Uncertain => {
-                        self.summary.uncertain += 1;
-                        "uncertain"
-                    }
-                };
-                match self.format {
-                    Format::Json => {
-                        let mut data = serde_json::to_value(&candidate)?;
-                        data["assessment"] = raw_assessment(&assessment);
-                        self.event("result", data)?;
-                    }
-                    Format::Sarif => self.sarif.result(&candidate, &assessment),
-                    Format::Text if assessment.outcome != Outcome::NoMatch => {
-                        if assessment.outcome == Outcome::Match {
-                            let probability = assessment
-                                .probabilities
-                                .get(&Outcome::Match)
-                                .copied()
-                                .unwrap_or(0.0);
-                            writeln!(
-                                self.writer,
-                                "{}\t{:.0}% match",
-                                candidate.label(),
-                                probability * 100.0
-                            )?;
-                        } else {
-                            writeln!(self.writer, "{}\t{outcome}", candidate.label())?;
-                        }
-                        self.writer.flush()?;
-                    }
-                    Format::Text => {}
+                } else {
+                    self.result(&candidate, &assessment)?;
                 }
             }
             ScanEvent::Skipped { path, lines } => {
@@ -190,7 +173,41 @@ impl<W: Write> Output<W> {
         Ok(())
     }
 
+    fn result(&mut self, candidate: &Candidate, assessment: &Assessment) -> Result<()> {
+        match self.format {
+            Format::Json => {
+                let mut data = serde_json::to_value(candidate)?;
+                data["assessment"] = raw_assessment(assessment);
+                self.event("result", data)?;
+            }
+            Format::Sarif => self.sarif.result(candidate, assessment),
+            Format::Text if assessment.outcome != Outcome::NoMatch => {
+                if assessment.outcome == Outcome::Match {
+                    writeln!(
+                        self.writer,
+                        "{}\t{:.0}% match",
+                        candidate.label(),
+                        match_probability(assessment) * 100.0
+                    )?;
+                } else {
+                    writeln!(self.writer, "{}\tuncertain", candidate.label())?;
+                }
+                self.writer.flush()?;
+            }
+            Format::Text => {}
+        }
+        Ok(())
+    }
+
     pub(crate) fn finish(&mut self) -> Result<u8> {
+        self.pending.sort_by(|(a, a_score), (b, b_score)| {
+            match_probability(b_score)
+                .total_cmp(&match_probability(a_score))
+                .then_with(|| location(a).cmp(&location(b)))
+        });
+        for (candidate, assessment) in std::mem::take(&mut self.pending) {
+            self.result(&candidate, &assessment)?;
+        }
         let code = self.summary.exit_code();
         if self.format == Format::Json {
             self.event("summary", serde_json::to_value(&self.summary)?)?;
@@ -224,6 +241,24 @@ impl<W: Write> Output<W> {
     }
 }
 
+fn match_probability(assessment: &Assessment) -> f64 {
+    assessment
+        .probabilities
+        .get(&Outcome::Match)
+        .copied()
+        .unwrap_or(0.0)
+}
+
+fn location(candidate: &Candidate) -> (Option<&str>, usize, usize, usize, usize) {
+    (
+        candidate.file.as_deref(),
+        candidate.range.start.line,
+        candidate.range.start.column,
+        candidate.range.end.line,
+        candidate.range.end.column,
+    )
+}
+
 pub(crate) fn raw_assessment(assessment: &Assessment) -> Value {
     json!({
         "choice": assessment.choice,
@@ -245,182 +280,4 @@ fn located(mut data: Value, lines: Option<LineRange>) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use ev_grep_core::{
-        Assessment, Candidate, LineRange, Outcome, Position, Region, ScanEvent, Uncertainty,
-    };
-    use serde_json::{Value, json};
-
-    use super::{Format, Output};
-
-    fn candidate(path: &str, lines: Option<LineRange>) -> Candidate {
-        let lines = lines.unwrap_or(LineRange { start: 1, end: 1 });
-        Candidate {
-            file: Some(path.into()),
-            text: "\n".repeat(lines.end - lines.start + 1),
-            range: Region {
-                start: Position {
-                    line: lines.start - 1,
-                    column: 0,
-                },
-                end: Position {
-                    line: lines.end,
-                    column: 0,
-                },
-                byte_offset: None,
-            },
-            context: None,
-        }
-    }
-
-    fn assessment(outcome: Outcome, reason: Option<Uncertainty>, confidence: f64) -> Assessment {
-        Assessment {
-            outcome,
-            reason,
-            choice: if outcome == Outcome::Uncertain {
-                Outcome::Match
-            } else {
-                outcome
-            },
-            confidence,
-            probabilities: BTreeMap::from([(outcome, confidence)]),
-            model: "fixture".into(),
-            input_tokens: 1,
-            output_tokens: 1,
-        }
-    }
-
-    #[test]
-    fn json_retains_uncertainty_and_errors_take_exit_precedence() -> anyhow::Result<()> {
-        let mut output = Output::new(Vec::new(), Format::Json, false);
-        output.summary.selected = 2;
-        output.scan_event(ScanEvent::Result {
-            candidate: candidate("a.py", Some(LineRange { start: 3, end: 9 })),
-            assessment: Assessment {
-                outcome: Outcome::Uncertain,
-                reason: Some(Uncertainty::LowConfidence),
-                choice: Outcome::NoMatch,
-                confidence: 0.5,
-                probabilities: BTreeMap::from([
-                    (Outcome::NoMatch, 0.7),
-                    (Outcome::Match, 0.2),
-                    (Outcome::Uncertain, 0.1),
-                ]),
-                model: "fixture".into(),
-                input_tokens: 1,
-                output_tokens: 1,
-            },
-        })?;
-        assert_eq!(output.summary.exit_code(), 3);
-        output.error(Some("b.py"), None, "request failed")?;
-        assert_eq!(output.finish()?, 2);
-        let records: Vec<Value> = std::str::from_utf8(&output.writer)?
-            .lines()
-            .map(serde_json::from_str)
-            .collect::<Result<_, _>>()?;
-        assert_eq!(records[0]["data"]["file"], "a.py");
-        assert_eq!(records[0]["data"]["range"]["start"]["line"], 2);
-        assert_eq!(records[0]["data"]["range"]["end"]["line"], 9);
-        assert!(records[1]["data"].get("start_line").is_none());
-        assert_eq!(records[0]["data"]["assessment"]["choice"], "no_match");
-        assert!(records[0]["data"]["assessment"].get("outcome").is_none());
-        assert_eq!(records[2]["type"], "summary");
-        assert_eq!(records[2]["data"]["errors"], 1);
-        Ok(())
-    }
-
-    #[test]
-    fn sarif_reports_matches_and_uncertain_results_with_locations() -> anyhow::Result<()> {
-        let mut output = Output::new(Vec::new(), Format::Sarif, false);
-        let query = "Catches a database failure\nand returns an empty result.\n";
-        output.begin(query, json!({"provider": "openrouter", "dry_run": false}))?;
-        output.summary.selected = 5;
-        for (path, lines, assessment) in [
-            (
-                "./src/users.py",
-                Some(LineRange { start: 20, end: 56 }),
-                assessment(Outcome::Match, None, 0.93),
-            ),
-            (
-                "src/odd:12 x.py",
-                None,
-                assessment(Outcome::Uncertain, Some(Uncertainty::LowConfidence), 0.62),
-            ),
-            (
-                "src/cart.py",
-                None,
-                assessment(Outcome::NoMatch, None, 0.97),
-            ),
-        ] {
-            output.scan_event(ScanEvent::Result {
-                candidate: candidate(path, lines),
-                assessment,
-            })?;
-        }
-        output.scan_event(ScanEvent::Skipped {
-            path: "/abs/image.py".into(),
-            lines: None,
-        })?;
-        output.error(Some("src/big.py"), None, "file exceeds 65536 bytes")?;
-        assert_eq!(output.finish()?, 2);
-
-        let log: Value = serde_json::from_slice(&output.writer)?;
-        assert_eq!(log["version"], "2.1.0");
-        let run = &log["runs"][0];
-        let rule = &run["tool"]["driver"]["rules"][0];
-        // Code scanning tracks alerts by rule ID, so the ID for a query must never change.
-        assert_eq!(rule["id"], "query/9884e336a13bc935");
-        assert_eq!(
-            rule["shortDescription"]["text"],
-            "Catches a database failure"
-        );
-        let results = run["results"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        assert_eq!(results.len(), 2, "nonmatches are left out");
-        assert!(results.iter().all(|result| result["ruleId"] == rule["id"]));
-        let location = |index: usize| &results[index]["locations"][0]["physicalLocation"];
-        assert_eq!(results[0]["level"], "warning");
-        assert_eq!(
-            location(0)["artifactLocation"],
-            json!({"uri": "src/users.py", "uriBaseId": "%SRCROOT%"})
-        );
-        assert_eq!(
-            location(0)["region"],
-            json!({"startLine": 20, "startColumn": 1, "endLine": 57, "endColumn": 1})
-        );
-        assert_eq!(results[1]["level"], "note");
-        assert_eq!(
-            location(1)["artifactLocation"]["uri"],
-            "src/odd%3A12%20x.py"
-        );
-        assert_eq!(
-            location(1)["region"],
-            json!({"startLine": 1, "startColumn": 1, "endLine": 2, "endColumn": 1})
-        );
-        assert_eq!(
-            results[1]["message"]["text"],
-            "Catches a database failure (ev-grep uncertain: low confidence 0.62)"
-        );
-        assert_eq!(results[1]["properties"]["assessment"]["choice"], "match");
-
-        let invocation = &run["invocations"][0];
-        assert_eq!(invocation["executionSuccessful"], false);
-        let notifications = invocation["toolExecutionNotifications"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        assert_eq!(notifications.len(), 2);
-        assert_eq!(notifications[0]["level"], "note");
-        assert_eq!(
-            notifications[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
-            "file:///abs/image.py"
-        );
-        assert_eq!(notifications[1]["level"], "error");
-        assert_eq!(run["properties"]["evGrep"]["summary"]["errors"], 1);
-        Ok(())
-    }
-}
+mod tests;

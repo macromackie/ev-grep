@@ -24,7 +24,7 @@ async fn main() -> ExitCode {
         (false, true) => Format::Json,
         (false, false) => Format::Text,
     };
-    let mut output = Output::new(stdout.lock(), format, cli.dry_run);
+    let mut output = Output::new(stdout.lock(), format, cli.dry_run, cli.sort);
     if let Err(error) = run(&cli, &mut output).await {
         if error
             .downcast_ref::<io::Error>()
@@ -47,7 +47,7 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
     let model = cli.provider.model(cli.model.as_deref())?;
     output.begin(
         &query,
-        json!({"provider": cli.provider, "requested_model": model, "min_confidence": cli.min_confidence, "dry_run": cli.dry_run, "jobs": cli.jobs}),
+        json!({"provider": cli.provider, "requested_model": model, "min_confidence": cli.min_confidence, "dry_run": cli.dry_run, "jobs": cli.jobs, "sort": cli.sort}),
     )?;
     let (mut inputs, errors) = inputs::select(cli, &arguments).await?;
     for error in errors {
