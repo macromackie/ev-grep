@@ -11,6 +11,9 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+futures-util.workspace = true
+fastrand.workspace = true
+httpdate.workspace = true
 ev-grep-core.workspace = true
 reqwest.workspace = true
 serde.workspace = true

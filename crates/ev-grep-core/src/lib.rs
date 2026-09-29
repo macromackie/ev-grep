@@ -1,6 +1,7 @@
 //! File selection and semantic assessments, independent of providers and terminal output.
 
 mod candidate;
+mod decision;
 mod discovery;
 mod region;
 mod scan;
@@ -8,6 +9,7 @@ mod source;
 mod target;
 
 pub use candidate::{Candidate, Input, Loaded};
+pub use decision::{DecisionBatch, Question, RequestInfo};
 pub use discovery::{Discovery, discover};
 pub use region::{Position, Region};
 pub use scan::{Evaluator, ScanEvent, scan, scan_inputs, scan_with_jobs};
@@ -44,8 +46,8 @@ pub struct Assessment {
     pub confidence: f64,
     pub probabilities: BTreeMap<Outcome, f64>,
     pub model: String,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<RequestInfo>,
 }
 
 impl Assessment {

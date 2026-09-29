@@ -151,7 +151,7 @@ impl<W: Write> Output<W> {
                 }
                 if self.sort == Sort::Score {
                     if self.format == Format::Json || assessment.outcome != Outcome::NoMatch {
-                        self.pending.push((candidate, assessment));
+                        self.pending.push((candidate, *assessment));
                     }
                 } else {
                     self.result(&candidate, &assessment)?;
@@ -265,8 +265,9 @@ pub(crate) fn raw_assessment(assessment: &Assessment) -> Value {
         "confidence": assessment.confidence,
         "probabilities": assessment.probabilities,
         "model": assessment.model,
-        "input_tokens": assessment.input_tokens,
-        "output_tokens": assessment.output_tokens,
+        "request": assessment.request,
+        "input_tokens": assessment.request.as_ref().map_or(0, |r| r.input_tokens),
+        "output_tokens": assessment.request.as_ref().map_or(0, |r| r.output_tokens),
     })
 }
 

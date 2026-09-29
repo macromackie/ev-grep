@@ -1,8 +1,8 @@
 //! Jev's typed decision protocol over OpenRouter or direct TypeSafe HTTP.
 
 mod config;
-mod http;
 mod protocol;
+mod transport;
 
 pub use config::Provider;
 pub use protocol::MIN_CONFIDENCE;
@@ -10,7 +10,7 @@ pub use protocol::MIN_CONFIDENCE;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use ev_grep_core::{Assessment, Evaluator, MAX_QUERY_BYTES, Source};
+use ev_grep_core::{Assessment, DecisionBatch, Evaluator, MAX_QUERY_BYTES, Question, Source};
 use reqwest::{
     Client,
     header::{AUTHORIZATION, HeaderMap, HeaderValue},
@@ -18,6 +18,7 @@ use reqwest::{
 
 pub struct Jev {
     client: Client,
+    transport: transport::Transport,
     endpoint: String,
     model: String,
     prompt: protocol::Prompt,
@@ -61,10 +62,11 @@ impl Jev {
             .user_agent(concat!("ev-grep/", env!("CARGO_PKG_VERSION")))
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(60))
+            .timeout(Duration::from_secs(5))
             .build()?;
         Ok(Self {
             client,
+            transport: transport::Transport::new(4)?,
             endpoint: endpoint.into(),
             model: model.into(),
             prompt: protocol::prompt()?,
@@ -81,14 +83,34 @@ impl Jev {
         Ok(self)
     }
 
-    async fn send(&self, request: &serde_json::Value) -> Result<Assessment> {
+    pub fn with_jobs(mut self, jobs: usize) -> Result<Self> {
+        self.transport = transport::Transport::new(jobs)?;
+        Ok(self)
+    }
+
+    async fn send(&self, request: &serde_json::Value) -> Result<DecisionBatch> {
         let body = serde_json::to_vec(request)?;
         ensure!(
             body.len() <= 96 * 1024,
             "encoded request exceeds 98304 bytes; context was not truncated"
         );
-        let bytes = http::post(&self.client, &self.endpoint, body).await?;
-        protocol::assessment(&bytes, &self.model)
+        let ids: Vec<_> = request["questions"]
+            .as_object()
+            .context("missing questions")?
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let completed = self
+            .transport
+            .post(&self.client, &self.endpoint, &body, |bytes| {
+                protocol::assessment(bytes, &self.model, &ids)
+            })
+            .await?;
+        let mut batch = completed.value;
+        batch.request.attempts = completed.attempts;
+        batch.request.hedges = completed.hedges;
+        batch.request.elapsed_ms = completed.elapsed_ms;
+        Ok(batch)
     }
 }
 
@@ -99,12 +121,34 @@ impl Evaluator for Jev {
         Ok(self
             .send(&request)
             .await?
+            .into_single()?
             .with_min_confidence(self.min_confidence))
     }
 
     async fn assess_context(&self, query: &str, state: &serde_json::Value) -> Result<Assessment> {
-        validate_query(query)?;
-        self.send(&protocol::context_request(&self.model, query, state))
+        self.assess_questions(&[Question { id: "match", query }], state)
+            .await?
+            .into_single()
+    }
+
+    async fn assess_questions(
+        &self,
+        questions: &[Question<'_>],
+        state: &serde_json::Value,
+    ) -> Result<DecisionBatch> {
+        ensure!(
+            !questions.is_empty() && questions.len() <= 32,
+            "expected 1–32 questions"
+        );
+        let mut ids = std::collections::BTreeSet::new();
+        for question in questions {
+            validate_query(question.query)?;
+            ensure!(
+                !question.id.is_empty() && question.id.len() <= 64 && ids.insert(question.id),
+                "question IDs must be unique and contain 1–64 bytes"
+            );
+        }
+        self.send(&protocol::context_request(&self.model, questions, state))
             .await
     }
 }

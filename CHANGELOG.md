@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.3
+
+- Recover transient provider failures within a bounded request budget. A slow Jev request may use one spare worker to race a duplicate; the first valid answer wins.
+- Include request attempts, hedges, elapsed time, and available usage in JSON assessments.
+- Support multiple named questions over shared context in the Rust adapter.
+
 ## v0.4.2
 
 - Add `--sort score` to order results by match probability. Streaming remains the default; sorting makes no extra model requests.

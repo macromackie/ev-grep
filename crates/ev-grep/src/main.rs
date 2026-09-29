@@ -86,7 +86,8 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
         &key,
         cli.endpoint.as_deref().unwrap_or(cli.provider.endpoint()),
     )?
-    .with_min_confidence(cli.min_confidence)?;
+    .with_min_confidence(cli.min_confidence)?
+    .with_jobs(usize::from(cli.jobs))?;
     scan_inputs(
         stream::once(std::future::ready(first)).chain(inputs),
         &query,

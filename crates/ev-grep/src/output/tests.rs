@@ -39,8 +39,11 @@ fn assessment(outcome: Outcome, reason: Option<Uncertainty>, confidence: f64) ->
         confidence,
         probabilities: BTreeMap::from([(outcome, confidence)]),
         model: "fixture".into(),
-        input_tokens: 1,
-        output_tokens: 1,
+        request: Some(ev_grep_core::RequestInfo {
+            input_tokens: 1,
+            output_tokens: 1,
+            ..Default::default()
+        }),
     }
 }
 
@@ -76,7 +79,7 @@ fn score_order_preserves_assessments_and_summary() -> anyhow::Result<()> {
                         end: line,
                     }),
                 ),
-                assessment: answer.with_min_confidence(0.8),
+                assessment: Box::new(answer.with_min_confidence(0.8)),
             })?;
         }
         assert_eq!(output.writer.is_empty(), sort == Sort::Score);
@@ -108,7 +111,7 @@ fn json_retains_uncertainty_and_errors_take_exit_precedence() -> anyhow::Result<
     output.summary.selected = 2;
     output.scan_event(ScanEvent::Result {
         candidate: candidate("a.py", Some(LineRange { start: 3, end: 9 })),
-        assessment: Assessment {
+        assessment: Box::new(Assessment {
             outcome: Outcome::Uncertain,
             reason: Some(Uncertainty::LowConfidence),
             choice: Outcome::NoMatch,
@@ -119,9 +122,12 @@ fn json_retains_uncertainty_and_errors_take_exit_precedence() -> anyhow::Result<
                 (Outcome::Uncertain, 0.1),
             ]),
             model: "fixture".into(),
-            input_tokens: 1,
-            output_tokens: 1,
-        },
+            request: Some(ev_grep_core::RequestInfo {
+                input_tokens: 1,
+                output_tokens: 1,
+                ..Default::default()
+            }),
+        }),
     })?;
     assert_eq!(output.summary.exit_code(), 3);
     output.error(Some("b.py"), None, "request failed")?;
@@ -166,7 +172,7 @@ fn sarif_reports_matches_and_uncertain_results_with_locations() -> anyhow::Resul
     ] {
         output.scan_event(ScanEvent::Result {
             candidate: candidate(path, lines),
-            assessment,
+            assessment: Box::new(assessment),
         })?;
     }
     output.scan_event(ScanEvent::Skipped {

@@ -140,7 +140,8 @@ fn uncertainty_and_invalid_protocol_cannot_become_confident_matches() -> Result<
     let model = Provider::TypeSafe.default_model();
     let mut body = response(model);
     body["answers"]["match"]["confidence"] = json!(0.5);
-    let raw = protocol::assessment(&serde_json::to_vec(&body)?, model)?;
+    let raw =
+        protocol::assessment(&serde_json::to_vec(&body)?, model, &["match"])?.into_single()?;
     assert_eq!(raw.outcome, Outcome::Match);
     let result = raw.with_min_confidence(0.8);
     assert_eq!(result.outcome, Outcome::Uncertain);
@@ -152,7 +153,8 @@ fn uncertainty_and_invalid_protocol_cannot_become_confident_matches() -> Result<
     body["answers"]["match"]["probabilities"] =
         json!({"match":0.01,"no_match":0.01,"uncertain":0.98});
     assert_eq!(
-        protocol::assessment(&serde_json::to_vec(&body)?, model)?
+        protocol::assessment(&serde_json::to_vec(&body)?, model, &["match"])?
+            .into_single()?
             .with_min_confidence(0.0)
             .outcome,
         Outcome::Uncertain
@@ -170,7 +172,7 @@ fn uncertainty_and_invalid_protocol_cannot_become_confident_matches() -> Result<
             _ => body["answers"] = json!({}),
         }
         assert!(
-            protocol::assessment(&serde_json::to_vec(&body)?, model).is_err(),
+            protocol::assessment(&serde_json::to_vec(&body)?, model, &["match"]).is_err(),
             "{mutation}"
         );
     }
@@ -180,8 +182,10 @@ fn uncertainty_and_invalid_protocol_cannot_become_confident_matches() -> Result<
         assert_eq!(
             protocol::assessment(
                 &serde_json::to_vec(&response(provider.default_model()))?,
-                provider.default_model()
+                provider.default_model(),
+                &["match"]
             )?
+            .into_single()?
             .model,
             provider.default_model()
         );

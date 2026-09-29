@@ -12,6 +12,12 @@ pub trait Evaluator: Sync {
         source: &Source,
     ) -> impl Future<Output = Result<Assessment>> + Send;
 
+    fn assess_questions(
+        &self,
+        questions: &[crate::Question<'_>],
+        state: &serde_json::Value,
+    ) -> impl Future<Output = Result<crate::DecisionBatch>> + Send;
+
     /// Assess labeled context without assuming it is one source file.
     fn assess_context(
         &self,
@@ -33,7 +39,7 @@ pub trait Evaluator: Sync {
 pub enum ScanEvent {
     Result {
         candidate: Candidate,
-        assessment: Assessment,
+        assessment: Box<Assessment>,
     },
     Skipped {
         path: String,
@@ -94,7 +100,7 @@ pub async fn scan_inputs(
             match evaluator.assess(query, &candidate.source()).await {
                 Ok(assessment) => ScanEvent::Result {
                     candidate,
-                    assessment,
+                    assessment: Box::new(assessment),
                 },
                 Err(error) => ScanEvent::Error(FileError::new(
                     candidate.file.as_deref().unwrap_or("<stdin>"),
