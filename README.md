@@ -14,7 +14,7 @@ The installer puts `ev-grep` in `~/.local/bin`. Add that directory to your `PATH
 You can also install a specific release with [mise](https://mise.jdx.dev/):
 
 ```sh
-mise use -g github:macromackie/ev-grep@0.4.2
+mise use -g github:macromackie/ev-grep@0.4.4
 ```
 
 Archives and checksums are on the [releases page](https://github.com/macromackie/ev-grep/releases).
@@ -50,7 +50,6 @@ src/actions.py   uncertain
 
 `match` means the model judges that the file matches the query. `uncertain` means it lacks enough context or confidence.
 Terminal output omits `no_match` files and writes a count summary to stderr. Use `--json` to include every assessment.
-Use `--sarif` to write a SARIF log for code scanning tools such as GitHub's.
 
 Put higher match probabilities first with `--sort score`:
 

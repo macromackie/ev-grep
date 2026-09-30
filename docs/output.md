@@ -99,14 +99,3 @@ The first matching row wins:
 | `1` | No matches, with no errors or uncertainty; includes empty selections |
 
 Dry runs return 0 for eligible text, 1 for an empty selection, and 2 for errors. They need no key and make no requests.
-
-## SARIF
-
-```sh
-ev-grep 'Hides a database failure' src/ --sarif > ev-grep.sarif
-```
-
-`--sarif` writes one SARIF 2.1.0 log at completion. Matches become warnings, uncertain answers become notes, and
-nonmatches are omitted. Results retain source locations and raw assessments. Stdin results have no file location.
-Errors become execution notifications. Relative paths resolve from the working directory. Run from the repository root
-when uploading to code scanning. An interrupted search may write no log. `--sarif` and `--json` are mutually exclusive.

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.4
+
+- Remove `--sarif`. Use text output for terminals and `--json` for integrations.
+- Retry a provider response that fails validation, such as probabilities that do not sum to one, within the existing
+  three-attempt budget instead of failing the search.
+- Rust API: remove `scan` and `scan_with_jobs`; call `scan_inputs` with file inputs instead.
+
 ## v0.4.3
 
 - Recover transient provider failures within a bounded request budget. A slow Jev request may use one spare worker to race a duplicate; the first valid answer wins.
@@ -43,7 +50,7 @@
 
 Search part of a file by adding `:N` or `:N-M` to a path, such as `ev-grep 'Writes to the database' src/users.py:40-72`. Lines count from 1 and include both ends. ev-grep still sends the whole file for context, and Jev judges only those lines. Terminal output prints the same `path:N-M` form, and JSON records add `start_line` and `end_line`. [Use with other tools](https://ev-grep.com/docs/pipelines) shows how to get paths and ranges from `rg`, `git diff`, and ast-grep.
 
-`--sarif` writes one SARIF 2.1.0 log to stdout when the search ends. Matches become warnings and uncertain results become notes, so GitHub code scanning and other SARIF tools can show them. [Output](https://ev-grep.com/docs/output#sarif) describes the mapping, and the pipelines guide has a [GitHub Actions workflow](https://ev-grep.com/docs/pipelines#upload-results-to-github-code-scanning). `--sarif` cannot be combined with `--json`.
+`--sarif` writes one SARIF 2.1.0 log to stdout when the search ends. Matches become warnings and uncertain results become notes, so GitHub code scanning and other SARIF tools can show them. `--sarif` cannot be combined with `--json`.
 
 Two changes may affect scripts:
 

@@ -57,37 +57,21 @@ Use [JSON score filters](./output.md#select-by-score) to choose a different thre
 To run a second question, write those candidate records to a file and pass `--candidates candidates.jsonl`.
 Keep the first run's exit status and summary alongside the filtered records.
 
-## Upload results to GitHub code scanning
-
-```yaml
-name: ev-grep
-on: pull_request
-permissions:
-  contents: read
-  security-events: write
-jobs:
-  search:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - run: |
-          curl -fsSL https://ev-grep.com/install.sh | bash
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - run: |
-          status=0
-          ev-grep 'Catches a database failure and returns an empty result' src/ --sarif > ev-grep.sarif || status=$?
-          case "$status" in 0|1|3) ;; *) exit "$status" ;; esac
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      - uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: ev-grep.sarif
-          category: ev-grep-database-errors
-```
-
-[SARIF output](./output.md#sarif) turns matches into warnings and uncertain results into notes, which appear as code scanning alerts. The step accepts search outcomes (`0`, `1`, or `3`) and fails on execution errors or interruption. Give each query its own `category` so its results don't replace another query's. Store the API key as a repository secret. Code scanning is available for public repositories, and for private ones with GitHub Code Security.
-
 ## Pitfalls
 
 - Choose stdin explicitly: `--stdin` for text, `--candidates -` for JSONL, or `-f -` for the query.
 - xargs may split a long list into several ev-grep runs, each with its own summary, JSON stream, and exit code. xargs exits `123` when any run exits with 1 to 125, which includes ev-grep's "no matches" (`1`) and "uncertain" (`3`). Read ev-grep's [summaries and exit codes](./output.md#exit-codes) rather than xargs's status.
+
+## Agent skill
+
+Download the [ev-grep skill](https://ev-grep.com/skill.md) into your agent's project skill directory. For agents that read `.agents/skills`:
+
+```sh
+mkdir -p .agents/skills/ev-grep
+curl -fsSL https://ev-grep.com/skill.md -o .agents/skills/ev-grep/SKILL.md
+```
+
+Inspect the downloaded instructions before adopting them. The skill covers input selection, interpreting results,
+and investigating findings. It also describes a focused curation loop for authorized code and contract changes.
+For optional code, architecture, and contract curation skills, see [Tenet guidance](https://tenet-contracts.com/docs/guidance).
+An agent can adopt selected guidance and review later updates while preserving project conventions.

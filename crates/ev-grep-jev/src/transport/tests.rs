@@ -125,6 +125,61 @@ async fn one_slot_never_hedges_and_cancellation_releases_it() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn invalid_answers_are_retried_within_the_attempt_limit() -> Result<()> {
+    let invalid = json!({"model":Provider::TypeSafe.default_model(),
+        "answers":{"relevant":{"type":"choice","choice":"match","confidence":0.9,
+            "probabilities":{"match":0.1,"no_match":0.8,"uncertain":0.1}}},
+        "usage":{"input_tokens":100,"output_tokens":2}});
+    let server = MockServer::start().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let mut valid = reply();
+    valid["answers"] = json!({"relevant": valid["answers"]["relevant"]});
+    Mock::given(path("/decision"))
+        .respond_with(move |_: &wiremock::Request| {
+            let body = if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                &invalid
+            } else {
+                &valid
+            };
+            ResponseTemplate::new(200).set_body_json(body)
+        })
+        .mount(&server)
+        .await;
+    let jev = Jev::with_endpoint(
+        Provider::TypeSafe,
+        Provider::TypeSafe.default_model(),
+        "test",
+        &format!("{}/decision", server.uri()),
+    )?;
+    let question = [Question {
+        id: "relevant",
+        query: "Relevant?",
+    }];
+    let result = jev.assess_questions(&question, &json!({})).await?;
+    assert_eq!(result.request.attempts, 2);
+
+    // A provider that never answers validly is an error after three attempts, not a verdict.
+    let broken = MockServer::start().await;
+    Mock::given(path("/decision"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"model": "other"})))
+        .mount(&broken)
+        .await;
+    let jev = Jev::with_endpoint(
+        Provider::TypeSafe,
+        Provider::TypeSafe.default_model(),
+        "test",
+        &format!("{}/decision", broken.uri()),
+    )?;
+    assert!(jev.assess_questions(&question, &json!({})).await.is_err());
+    assert_eq!(
+        broken.received_requests().await.unwrap_or_default().len(),
+        3
+    );
+    Ok(())
+}
+
 #[test]
 fn partial_batches_are_protocol_errors() -> Result<()> {
     let value = reply();

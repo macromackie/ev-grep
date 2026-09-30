@@ -6,13 +6,10 @@ use ev_grep_core::{Assessment, Candidate, LineRange, Outcome, ScanEvent, label};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::sarif::Sarif;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Format {
     Text,
     Json,
-    Sarif,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
@@ -51,10 +48,9 @@ impl Summary {
 pub(crate) struct Output<W> {
     writer: W,
     format: Format,
-    sarif: Sarif,
     sort: Sort,
     pending: Vec<(Candidate, Assessment)>,
-    pub summary: Summary,
+    summary: Summary,
 }
 
 impl<W: Write> Output<W> {
@@ -62,7 +58,6 @@ impl<W: Write> Output<W> {
         Self {
             writer,
             format,
-            sarif: Sarif::default(),
             sort,
             pending: Vec::new(),
             summary: Summary {
@@ -72,12 +67,7 @@ impl<W: Write> Output<W> {
         }
     }
 
-    /// Records the run configuration. JSON Lines streams it; SARIF keeps it, with the query, for its rule.
-    pub(crate) fn begin(&mut self, query: &str, data: Value) -> Result<()> {
-        if self.format == Format::Sarif {
-            self.sarif.begin(query, data);
-            return Ok(());
-        }
+    pub(crate) fn begin(&mut self, data: Value) -> Result<()> {
         self.event("begin", data)
     }
 
@@ -106,9 +96,6 @@ impl<W: Write> Output<W> {
                 located(json!({ "file": path, "message": message }), lines),
             )?;
         } else {
-            if self.format == Format::Sarif {
-                self.sarif.notification("error", path, lines, message);
-            }
             writeln!(
                 io::stderr().lock(),
                 "ev-grep: {}{message}",
@@ -119,7 +106,9 @@ impl<W: Write> Output<W> {
         Ok(())
     }
 
+    /// Report a candidate selected by a dry run.
     pub(crate) fn selected(&mut self, candidate: &Candidate) -> Result<()> {
+        self.summary.selected += 1;
         let bytes = candidate.bytes();
         match self.format {
             Format::Json => {
@@ -127,17 +116,14 @@ impl<W: Write> Output<W> {
                 data["bytes"] = json!(bytes);
                 self.event("selected", data)?;
             }
-            Format::Sarif => {
-                if let Some(file) = &candidate.file {
-                    self.sarif.artifact(file, bytes);
-                }
-            }
             Format::Text => writeln!(self.writer, "{}\t{bytes} bytes", candidate.label())?,
         }
         Ok(())
     }
 
+    /// Report the outcome of one selected input: a result, a skipped binary file, or an input error.
     pub(crate) fn scan_event(&mut self, event: ScanEvent) -> Result<()> {
+        self.summary.selected += 1;
         match event {
             ScanEvent::Result {
                 candidate,
@@ -159,10 +145,6 @@ impl<W: Write> Output<W> {
             }
             ScanEvent::Skipped { path, lines } => {
                 self.summary.skipped += 1;
-                if self.format == Format::Sarif {
-                    let message = "skipped binary file";
-                    self.sarif.notification("note", Some(&path), lines, message);
-                }
                 let data = json!({"file": path, "reason": "binary"});
                 self.event("skipped", located(data, lines))?;
             }
@@ -180,7 +162,6 @@ impl<W: Write> Output<W> {
                 data["assessment"] = raw_assessment(assessment);
                 self.event("result", data)?;
             }
-            Format::Sarif => self.sarif.result(candidate, assessment),
             Format::Text if assessment.outcome != Outcome::NoMatch => {
                 if assessment.outcome == Outcome::Match {
                     writeln!(
@@ -228,14 +209,6 @@ impl<W: Write> Output<W> {
                     ""
                 }
             )?;
-        }
-        if self.format == Format::Sarif {
-            let cwd = std::env::current_dir().ok();
-            let summary = serde_json::to_value(&self.summary)?;
-            let document = self.sarif.document(summary, cwd.as_deref());
-            serde_json::to_writer_pretty(&mut self.writer, &document)?;
-            writeln!(self.writer)?;
-            self.writer.flush()?;
         }
         Ok(code)
     }

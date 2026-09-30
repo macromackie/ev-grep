@@ -12,7 +12,7 @@ pub use candidate::{Candidate, Input, Loaded};
 pub use decision::{DecisionBatch, Question, RequestInfo};
 pub use discovery::{Discovery, discover};
 pub use region::{Position, Region};
-pub use scan::{Evaluator, ScanEvent, scan, scan_inputs, scan_with_jobs};
+pub use scan::{Evaluator, ScanEvent, scan_inputs};
 pub use source::{
     Focus, MAX_FILE_BYTES, MAX_QUERY_BYTES, Source, SourceRead, read_source, read_target, read_text,
 };

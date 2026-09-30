@@ -1,9 +1,9 @@
 use std::future::Future;
 
 use anyhow::{Result, ensure};
-use futures_util::{Stream, StreamExt, stream};
+use futures_util::{Stream, StreamExt};
 
-use crate::{Assessment, Candidate, FileError, Input, LineRange, Loaded, Source, Target};
+use crate::{Assessment, Candidate, FileError, Input, LineRange, Loaded, Source};
 
 pub trait Evaluator: Sync {
     fn assess(
@@ -46,34 +46,6 @@ pub enum ScanEvent {
         lines: Option<LineRange>,
     },
     Error(FileError),
-}
-
-/// At most four targets are read and evaluated concurrently; output is emitted as work completes.
-pub async fn scan(
-    targets: Vec<Target>,
-    query: &str,
-    evaluator: &impl Evaluator,
-    emit: impl FnMut(ScanEvent) -> Result<()>,
-) -> Result<()> {
-    scan_with_jobs(targets, query, evaluator, 4, emit).await
-}
-
-/// Scan with a bounded pool of 1 to 256 concurrent assessments.
-pub async fn scan_with_jobs(
-    targets: Vec<Target>,
-    query: &str,
-    evaluator: &impl Evaluator,
-    jobs: usize,
-    emit: impl FnMut(ScanEvent) -> Result<()>,
-) -> Result<()> {
-    scan_inputs(
-        stream::iter(targets.into_iter().map(Input::File)),
-        query,
-        evaluator,
-        jobs,
-        emit,
-    )
-    .await
 }
 
 /// All input modes share this bounded assessment pool.

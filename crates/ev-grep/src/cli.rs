@@ -63,10 +63,6 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub json: bool,
 
-    /// Write one SARIF 2.1.0 log to stdout when the search ends, for code scanning tools.
-    #[arg(long, conflicts_with = "json")]
-    pub sarif: bool,
-
     /// Inspect file selection and size limits without credentials or API requests.
     #[arg(long)]
     pub dry_run: bool,

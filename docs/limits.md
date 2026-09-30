@@ -17,7 +17,12 @@ Transient connection, body-read, and HTTP errors get up to three attempts within
 After one second, ev-grep may start one duplicate request if the shared `--jobs` pool has spare capacity.
 The first valid response wins, including `uncertain`; remaining attempts are cancelled.
 Rate limits pause new requests. Retry delays include jitter and honor `Retry-After` seconds or dates.
-Authentication and invalid-response errors are not retried. All attempts use the same input, provider, and model.
+A response that fails validation, such as probabilities that do not sum to one, gets the same bounded attempts; it never
+becomes a result. Authentication errors are not retried. All attempts use the same input, provider, and model.
+
+TypeSafe publishes per-account limits of 40 requests and 100K input tokens per second and adjusts them with demand.
+Function candidates with file context resend the whole file for each function, so a high `--jobs` value can reach the
+token limit. If searches report HTTP 429, lower `--jobs`.
 
 Duplicate or interrupted requests may still incur charges. JSON request metadata reports attempts, hedges,
 elapsed time, and usage from the winning response; it is not a complete billing record.

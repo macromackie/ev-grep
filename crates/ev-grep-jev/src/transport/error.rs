@@ -18,6 +18,14 @@ impl Failure {
         }
     }
 
+    /// A response that fails validation carries no usable answer, so another attempt may return a valid one.
+    pub(super) fn invalid(message: impl Into<String>) -> Self {
+        Self {
+            retryable: true,
+            ..Self::permanent(message)
+        }
+    }
+
     pub(super) fn transport(error: reqwest::Error) -> Self {
         let retryable =
             error.is_timeout() || error.is_connect() || error.is_body() || error.is_request();

@@ -1,7 +1,6 @@
 mod cli;
 mod inputs;
 mod output;
-mod sarif;
 
 use std::{io, process::ExitCode};
 
@@ -19,11 +18,7 @@ use output::{Format, Output};
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     let stdout = io::stdout();
-    let format = match (cli.sarif, cli.json) {
-        (true, _) => Format::Sarif,
-        (false, true) => Format::Json,
-        (false, false) => Format::Text,
-    };
+    let format = if cli.json { Format::Json } else { Format::Text };
     let mut output = Output::new(stdout.lock(), format, cli.dry_run, cli.sort);
     if let Err(error) = run(&cli, &mut output).await {
         if error
@@ -46,7 +41,6 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
     let (query, arguments) = cli.query_and_targets()?;
     let model = cli.provider.model(cli.model.as_deref())?;
     output.begin(
-        &query,
         json!({"provider": cli.provider, "requested_model": model, "min_confidence": cli.min_confidence, "dry_run": cli.dry_run, "jobs": cli.jobs, "sort": cli.sort}),
     )?;
     let (mut inputs, errors) = inputs::select(cli, &arguments).await?;
@@ -55,14 +49,13 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
     }
     if cli.dry_run {
         while let Some(input) = inputs.next().await {
-            output.summary.selected += 1;
             match input.load() {
                 Ok(Loaded::Candidate(candidate)) => output.selected(&candidate)?,
                 Ok(Loaded::Binary(target)) => output.scan_event(ScanEvent::Skipped {
                     path: target.path.display().to_string(),
                     lines: target.lines,
                 })?,
-                Err(error) => output.error(Some(&error.path), error.lines, &error.message)?,
+                Err(error) => output.scan_event(ScanEvent::Error(error))?,
             }
         }
         return Ok(());
@@ -70,10 +63,7 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
     let first = loop {
         match inputs.next().await {
             None => return Ok(()),
-            Some(Input::Error(error)) => {
-                output.summary.selected += 1;
-                output.error(Some(&error.path), error.lines, &error.message)?;
-            }
+            Some(Input::Error(error)) => output.scan_event(ScanEvent::Error(error))?,
             Some(input) => break input,
         }
     };
@@ -93,10 +83,7 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
         &query,
         &jev,
         usize::from(cli.jobs),
-        |event| {
-            output.summary.selected += 1;
-            output.scan_event(event)
-        },
+        |event| output.scan_event(event),
     )
     .await
 }

@@ -26,5 +26,5 @@ pub(super) async fn send<T>(
         }
         bytes.extend_from_slice(&chunk);
     }
-    validate(&bytes).map_err(|error| Failure::permanent(error.to_string()))
+    validate(&bytes).map_err(|error| Failure::invalid(error.to_string()))
 }
