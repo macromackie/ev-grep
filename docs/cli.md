@@ -4,7 +4,8 @@
 ev-grep 'Performs database operations' src/
 ```
 
-The first argument is one query. Remaining arguments are paths; without paths, ev-grep searches the current directory.
+The first argument is one query. In path mode, remaining arguments are paths; without paths, ev-grep searches the
+current directory. Use `--stdin`, `--candidates`, or `--state` to select another input mode explicitly.
 
 ## Select files
 
@@ -61,6 +62,34 @@ cat src/users.py | ev-grep 'Hides a database failure' --stdin
 The complete stream is one candidate. Use a query argument or a query file on disk. Stdin inputs cannot be combined
 with paths or globs. Empty text is still one candidate; empty candidate streams select nothing.
 
+## Assess JSON state
+
+```sh
+ev-grep 'Is the job marked failed?' --state state.json
+ev-grep --query-file question.txt --state state.json
+printf '%s\n' '{"job":{"status":"failed","attempts":3}}' \
+  | ev-grep 'Is the job marked failed?' --state - --json
+```
+
+`--state FILE` asks one question about a supplied JSON value; `-` reads it from stdin. The input must contain exactly
+one value and fit within 64 KiB. Objects, arrays, strings, numbers, booleans, and `null` are all valid.
+Large integers and decimal precision are preserved without floating-point rounding. Large exponents are also accepted.
+
+Disk inputs must be regular files. Symbolic links, directories, and FIFOs are rejected; use `--state -` for a pipe.
+
+This mode sends the query and state to the provider. It does not select source candidates or open paths mentioned
+inside the state. It uses the same context classifier as the Rust `Evaluator::assess_context` API: `match` is an
+affirmative answer, `no_match` is a negative answer, and `uncertain` retains uncertainty. The answer concerns only
+the supplied question and state.
+
+State input cannot be combined with paths, `--stdin`, `--candidates`, `--context`, or an explicit `--sort` option.
+The query and state cannot both read stdin. Add `--dry-run --json` to inspect the parsed state and its content-derived
+`input_id` without credentials or requests.
+
+Text output prints the answer, including `no_match`. JSON emits `selected_state` for a dry run or `assessment` for a
+model answer; both retain the state and its identifier. See [Output](./output.md#state-assessments) for record fields.
+Exit codes remain 0 for match, 1 for no-match, 2 for input or execution errors, and 3 for uncertainty.
+
 ## Search candidates
 
 ```sh
@@ -69,7 +98,9 @@ ast-grep run --kind function_declaration --lang ts --json=stream src/ \
 ```
 
 Each JSON line is one candidate. `--candidates candidates.jsonl` reads from a file instead. Records use ast-grep's
-`file`, `range`, and `text` fields. Extra metadata is ignored. A JSON array is not accepted; use `--json=stream`.
+`file`, `range`, and `text` fields. Optional `metaVariables` is retained in JSON output to trace the syntax selection.
+Its serialized value is limited to 64 KiB and is excluded from the model's candidate search input. Other extra
+metadata is ignored. A JSON array is not accepted; use `--json=stream`.
 
 ev-grep never opens paths from candidate records. To include file context, add
 `context` containing the complete original file; its selected slice must equal `text`. Positions count lines and
@@ -87,7 +118,7 @@ uses the same coordinates as the candidate. For example:
 
 Each record is assessed independently, including repeated ranges in the same file. Malformed records produce errors;
 valid records still run. An oversized record or an unreadable stream stops input, retaining earlier results.
-`--stdin`, `--candidates`, and path searches are separate input modes.
+`--stdin`, `--candidates`, `--state`, and path searches are separate input modes.
 
 ## Preview a search
 
@@ -131,6 +162,7 @@ ev-grep [OPTIONS] --query-file <FILE> [PATHS]...
 | `-f, --query-file FILE` | Read one query from a file; `-` reads stdin |
 | `--stdin` | Assess stdin as one text candidate |
 | `--candidates FILE` | Read candidate JSON Lines; `-` reads stdin |
+| `--state FILE` | Assess one JSON value; `-` reads stdin |
 | `--context PATH[:N-M]` | Attach a supporting file or line range to every candidate; repeat to add sources |
 | `-g, --glob GLOB` | Filter paths; repeat to add filters, prefix with `!` to exclude |
 | `--provider PROVIDER` | `openrouter` (default) or `typesafe` |
@@ -139,7 +171,7 @@ ev-grep [OPTIONS] --query-file <FILE> [PATHS]...
 | `--min-confidence N` | Route answers below N to uncertain; 0 to 1 (default 0.8) |
 | `--sort ORDER` | `none` streams results (default); `score` sorts by descending match probability |
 | `--json` | Write versioned JSON Lines to stdout |
-| `--dry-run` | List files without credentials or API requests |
+| `--dry-run` | Inspect selected input without credentials or API requests |
 | `-h, --help` | Show usage |
 | `-V, --version` | Show the executable version |
 

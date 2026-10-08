@@ -1,17 +1,51 @@
-use std::{path::PathBuf, pin::Pin};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    pin::Pin,
+};
 
 use anyhow::{Context, Result, ensure};
 use ev_grep_core::{
     Candidate, FileError, Input, MAX_FILE_BYTES, Region, SourceRead, SupportingSource, Target,
-    discover, read_target,
+    discover, read_source, read_target, read_text,
 };
 use futures_util::{Stream, stream};
+use serde::Serialize;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 
 use crate::cli::Cli;
 
 const MAX_RECORD_BYTES: usize = 512 * 1024;
 type Inputs = Pin<Box<dyn Stream<Item = Input>>>;
+
+#[derive(Serialize)]
+pub(crate) struct StateInput {
+    pub state: Value,
+    pub input_id: String,
+    pub bytes: usize,
+}
+
+pub(crate) fn state(path: &Path) -> Result<StateInput> {
+    let text = if path.as_os_str() == "-" {
+        read_text(io::stdin().lock(), MAX_FILE_BYTES)?
+    } else {
+        let SourceRead::Text(source) =
+            read_source(path).with_context(|| format!("cannot read state {}", path.display()))?
+        else {
+            anyhow::bail!("state input is binary");
+        };
+        source.text
+    };
+    let state: Value = serde_json::from_str(&text).context("expected one JSON state value")?;
+    let input_id = format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(&state)?));
+    Ok(StateInput {
+        state,
+        input_id,
+        bytes: text.len(),
+    })
+}
 
 pub(crate) async fn select(cli: &Cli, arguments: &[String]) -> Result<(Inputs, Vec<FileError>)> {
     if cli.stdin {
@@ -31,6 +65,7 @@ pub(crate) async fn select(cli: &Cli, arguments: &[String]) -> Result<(Inputs, V
             text,
             context: None,
             supporting: Vec::new(),
+            meta_variables: None,
         };
         candidate.validate()?;
         return Ok((

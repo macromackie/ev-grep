@@ -1,6 +1,6 @@
 mod request;
 mod response;
-pub(crate) use request::context_prompt_id;
+pub use request::context_prompt_id;
 #[cfg(test)]
 pub(crate) use request::parse_prompt;
 pub use request::search_prompt_id;

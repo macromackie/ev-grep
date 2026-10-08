@@ -1,6 +1,6 @@
 # Output
 
-Terminal output lists matching and uncertain locations. For example:
+For source searches, terminal output lists matching and uncertain locations. For example:
 
 ```text
 src/users.py:20-56    92% match
@@ -9,7 +9,7 @@ src/client.py:20-45   uncertain (model chose no_match; confidence 0.5 < 0.8)
 ```
 
 The percentage is the model's probability for `match`. It is not the probability that a review is correct.
-Nonmatches are omitted. Counts and errors go to stderr.
+Source nonmatches are omitted. State mode prints every answer, including `no_match`. Counts and errors go to stderr.
 
 Use `--sort score` to put higher match probabilities first. Results wait until the search finishes; errors remain
 immediate. Sorting preserves the model's scores and keeps uncertain results. It makes no extra model requests.
@@ -54,6 +54,7 @@ Every record has `schema_version: 2`, `type`, and `data`. A result has this shap
 Positions count from zero; columns count Unicode characters. The end is exclusive. Optional `byteOffset` counts
 UTF-8 bytes. `file` is null for stdin. Optional `context` carries the complete original file used to assess a range.
 `supporting` contains any supplied source entries, each with `file`, `range`, and `text`; it is omitted when empty.
+Optional `metaVariables` retains ast-grep selection metadata; it is not part of the model's candidate search input.
 Results contain source text; store them as carefully as the source itself.
 
 `probabilities` answers one question with three alternatives. Low match probability alone cannot distinguish a clear
@@ -68,8 +69,10 @@ Other outcomes omit `reason`. These reasons describe routing; the classifier doe
 | Type | Data |
 | --- | --- |
 | `begin` | `query`, executable `version`, `prompt_id`, provider, requested model, confidence threshold, dry-run flag, jobs, sort order |
-| `selected` | Dry run: candidate `file`, `range`, `text`, optional `context` and `supporting`, and combined input `bytes` |
+| `selected` | Dry run: candidate fields, including optional `context`, `supporting`, and `metaVariables`, and combined source `bytes` |
 | `result` | Candidate fields, raw `assessment`, and `routing` |
+| `selected_state` | State dry run: `state`, content-derived `input_id`, and input `bytes` |
+| `assessment` | State answer: `state`, `input_id`, `bytes`, raw `assessment`, and `routing` |
 | `skipped` | File, optional requested lines, and binary reason |
 | `error` | File or input identifier, optional requested lines, and message |
 | `summary` | Selected, evaluated, match, no-match, uncertain, skipped, and error counts; dry-run flag |
@@ -77,6 +80,20 @@ Other outcomes omit `reason`. These reasons describe routing; the classifier doe
 Results arrive as requests finish, or in descending match probability with `--sort score`. All successful assessments appear, including nonmatches. Completed runs end with
 one summary. Interrupted runs may not. Argument parsing errors print usage and exit 2 before starting the stream.
 Sorted runs buffer results, so interruption may leave only configuration, errors, and skips.
+
+## State assessments
+
+With [--state](./cli.md#assess-json-state), the `begin` record adds `mode: "state"`. Its `query` and executable `version`
+describe the run, and `prompt_id` identifies the context classifier prompt.
+
+The `selected_state` and `assessment` records retain the parsed JSON value as `state`. Large integers and decimal
+precision are preserved without floating-point rounding. `input_id` has the form `sha256:…` and hashes the serialized
+parsed value; input whitespace does not affect it. `bytes` counts the original input bytes. These records have no
+candidate file or range, and state fields that look like paths are never opened.
+
+An `assessment` record includes the same raw answer, token usage, request metadata, and separate `routing` as a source
+result. The label answers the supplied question; it does not establish a broader review conclusion. Completed state
+runs end with a summary and use the same exit codes as source searches. A valid state dry run exits 0.
 
 ## Select by score
 
@@ -113,4 +130,5 @@ The first matching row wins:
 | `0` | At least one match, with no errors or uncertainty |
 | `1` | No matches, with no errors or uncertainty; includes empty selections |
 
-Dry runs return 0 for eligible text, 1 for an empty selection, and 2 for errors. They need no key and make no requests.
+Dry runs return 0 for eligible text or a valid state value, 1 for an empty candidate selection, and 2 for errors.
+They need no key and make no requests.

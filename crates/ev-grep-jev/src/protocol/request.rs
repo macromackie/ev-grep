@@ -103,7 +103,7 @@ pub fn search_prompt_id() -> String {
     format!("sha256:{:x}", Sha256::digest(PROMPT.as_bytes()))
 }
 
-pub(crate) fn context_prompt_id() -> String {
+pub fn context_prompt_id() -> String {
     let request = context_request(
         "",
         &[ev_grep_core::Question { id: "", query: "" }],

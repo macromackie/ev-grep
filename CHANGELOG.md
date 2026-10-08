@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.0
+
+- Assess a supplied JSON value with `--state FILE` or `--state -`. State input is bounded to 64 KiB, preserves numeric
+  precision, and never opens paths inside the value. Use `--dry-run --json` to inspect it without a model request.
+- State JSON output retains the input, its content-derived identity, the raw model answer, and separate confidence
+  routing. Terminal output includes negative answers. Source search behavior and JSONL schema version 2 are unchanged.
+- Preserve bounded ast-grep `metaVariables` in candidate output as selection metadata without sending it to the model.
+- Rust API: `Candidate` adds optional `meta_variables`; use `None` in existing struct literals. The provider adapter
+  exposes `context_prompt_id()` for callers recording the generic question prompt's identity.
+
 ## v0.5.0
 
 - Supply helper implementations with repeatable `--context PATH[:N-M]` or candidate JSON `supporting`. Supporting code

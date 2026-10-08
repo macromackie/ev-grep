@@ -5,7 +5,7 @@ mod protocol;
 mod transport;
 
 pub use config::Provider;
-pub use protocol::search_prompt_id;
+pub use protocol::{context_prompt_id, search_prompt_id};
 
 use std::time::Duration;
 

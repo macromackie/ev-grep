@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 
+use crate::inputs::StateInput;
 use anyhow::Result;
 use clap::ValueEnum;
 use ev_grep_core::{Assessment, Candidate, LineRange, Outcome, ScanEvent, Uncertainty, label};
@@ -129,6 +130,57 @@ impl<W: Write> Output<W> {
         Ok(())
     }
 
+    pub(crate) fn select_state(&mut self, input: &StateInput) -> Result<()> {
+        self.summary.selected += 1;
+        if !self.summary.dry_run {
+            return Ok(());
+        }
+        match self.format {
+            Format::Json => self.event("selected_state", input)?,
+            Format::Text => writeln!(self.writer, "<state>\t{} bytes", input.bytes)?,
+        }
+        Ok(())
+    }
+
+    fn count_assessment(&mut self, assessment: &Assessment) {
+        self.summary.evaluated += 1;
+        match assessment.route(self.min_confidence).outcome {
+            Outcome::Match => self.summary.matches += 1,
+            Outcome::NoMatch => self.summary.no_match += 1,
+            Outcome::Uncertain => self.summary.uncertain += 1,
+        }
+    }
+
+    pub(crate) fn state_result(
+        &mut self,
+        input: &StateInput,
+        assessment: &Assessment,
+    ) -> Result<()> {
+        self.count_assessment(assessment);
+        let routing = assessment.route(self.min_confidence);
+        match self.format {
+            Format::Json => {
+                let mut data = serde_json::to_value(input)?;
+                data["assessment"] = raw_assessment(assessment);
+                data["routing"] = serde_json::to_value(routing)?;
+                self.event("assessment", data)?;
+            }
+            Format::Text => {
+                let answer = match routing.outcome {
+                    Outcome::Match => format!("match (confidence {})", assessment.confidence),
+                    Outcome::NoMatch => format!("no_match (confidence {})", assessment.confidence),
+                    Outcome::Uncertain => format!(
+                        "uncertain ({})",
+                        uncertainty(assessment, self.min_confidence)
+                    ),
+                };
+                writeln!(self.writer, "<state>\t{answer}")?;
+                self.writer.flush()?;
+            }
+        }
+        Ok(())
+    }
+
     /// Report the outcome of one selected input: a result, a skipped binary file, or an input error.
     pub(crate) fn scan_event(&mut self, event: ScanEvent) -> Result<()> {
         self.summary.selected += 1;
@@ -137,13 +189,8 @@ impl<W: Write> Output<W> {
                 candidate,
                 assessment,
             } => {
-                self.summary.evaluated += 1;
+                self.count_assessment(&assessment);
                 let routing = assessment.route(self.min_confidence);
-                match routing.outcome {
-                    Outcome::Match => self.summary.matches += 1,
-                    Outcome::NoMatch => self.summary.no_match += 1,
-                    Outcome::Uncertain => self.summary.uncertain += 1,
-                }
                 if self.sort == Sort::Score {
                     if self.format == Format::Json || routing.outcome != Outcome::NoMatch {
                         self.pending.push((candidate, *assessment));
@@ -182,20 +229,7 @@ impl<W: Write> Output<W> {
                         match_probability(assessment) * 100.0
                     )?;
                 } else {
-                    let explanation = match routing.reason {
-                        Some(Uncertainty::ModelUncertain) => "model chose uncertain".to_owned(),
-                        Some(Uncertainty::LowConfidence) => format!(
-                            "model chose {}; confidence {} < {}",
-                            match assessment.choice {
-                                Outcome::Match => "match",
-                                Outcome::NoMatch => "no_match",
-                                Outcome::Uncertain => "uncertain",
-                            },
-                            assessment.confidence,
-                            self.min_confidence,
-                        ),
-                        None => unreachable!("uncertain routing requires a reason"),
-                    };
+                    let explanation = uncertainty(assessment, self.min_confidence);
                     writeln!(
                         self.writer,
                         "{}\tuncertain ({explanation})",
@@ -240,6 +274,23 @@ impl<W: Write> Output<W> {
             )?;
         }
         Ok(code)
+    }
+}
+
+fn uncertainty(assessment: &Assessment, minimum: f64) -> String {
+    match assessment.route(minimum).reason {
+        Some(Uncertainty::ModelUncertain) => "model chose uncertain".to_owned(),
+        Some(Uncertainty::LowConfidence) => format!(
+            "model chose {}; confidence {} < {}",
+            match assessment.choice {
+                Outcome::Match => "match",
+                Outcome::NoMatch => "no_match",
+                Outcome::Uncertain => "uncertain",
+            },
+            assessment.confidence,
+            minimum,
+        ),
+        None => unreachable!("uncertain routing requires a reason"),
     }
 }
 

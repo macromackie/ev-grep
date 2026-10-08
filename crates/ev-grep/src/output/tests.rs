@@ -23,6 +23,7 @@ fn candidate(path: &str, lines: Option<LineRange>) -> Candidate {
         },
         context: None,
         supporting: Vec::new(),
+        meta_variables: None,
     }
 }
 

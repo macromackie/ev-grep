@@ -31,6 +31,10 @@ pub(crate) struct Cli {
     #[arg(long, value_name = "FILE", conflicts_with = "glob")]
     pub candidates: Option<PathBuf>,
 
+    /// Assess one JSON value from FILE, or stdin with '-', using the context-question prompt.
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["stdin", "candidates", "context", "glob", "sort"])]
+    pub state: Option<PathBuf>,
+
     /// Supply a supporting file or PATH:N-M range for every candidate; repeat for more sources.
     #[arg(long, value_name = "PATH[:N-M]")]
     pub context: Vec<String>,
@@ -82,8 +86,12 @@ fn confidence(value: &str) -> std::result::Result<f64, String> {
 
 impl Cli {
     pub(crate) fn query_and_targets(&self) -> Result<(String, Vec<String>)> {
-        let piped = self.stdin || self.candidates.is_some();
+        let piped = self.stdin || self.candidates.is_some() || self.state.is_some();
         let source_stdin = self.stdin
+            || self
+                .state
+                .as_ref()
+                .is_some_and(|path| path.as_os_str() == "-")
             || self
                 .candidates
                 .as_ref()
@@ -116,7 +124,7 @@ impl Cli {
         };
         ensure!(
             !piped || paths.is_empty(),
-            "stdin and candidate inputs cannot be combined with paths"
+            "stdin, candidate, and state inputs cannot be combined with paths"
         );
         let targets = if paths.is_empty() && !piped {
             vec![".".to_owned()]

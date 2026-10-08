@@ -14,6 +14,9 @@ pub struct Candidate {
     pub context: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supporting: Vec<SupportingSource>,
+    /// Caller provenance retained for composition; never included in search model input.
+    #[serde(rename = "metaVariables", skip_serializing_if = "Option::is_none")]
+    pub meta_variables: Option<serde_json::Value>,
 }
 
 /// Explicit dependency evidence. The file is a label and is never read during assessment.
@@ -68,6 +71,12 @@ impl Candidate {
             "candidate contains NUL bytes"
         );
         self.range.validate(&self.text, self.context.as_deref())?;
+        if let Some(metadata) = &self.meta_variables {
+            ensure!(
+                serde_json::to_vec(metadata)?.len() <= MAX_FILE_BYTES,
+                "candidate metadata exceeds 65536 bytes; input was not truncated"
+            );
+        }
         for source in &self.supporting {
             source.validate()?;
         }
@@ -109,6 +118,7 @@ impl Candidate {
             text,
             context,
             supporting: Vec::new(),
+            meta_variables: None,
         };
         candidate.validate()?;
         Ok(candidate)

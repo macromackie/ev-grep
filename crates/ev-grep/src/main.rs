@@ -6,7 +6,7 @@ use std::{io, process::ExitCode};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ev_grep_core::{Input, Loaded, ScanEvent, scan_inputs};
+use ev_grep_core::{Evaluator, Input, Loaded, ScanEvent, scan_inputs};
 use ev_grep_jev::Jev;
 use futures_util::{StreamExt, stream};
 use serde_json::json;
@@ -46,6 +46,21 @@ async fn main() -> ExitCode {
 async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
     let (query, arguments) = cli.query_and_targets()?;
     let model = cli.provider.model(cli.model.as_deref())?;
+    if let Some(path) = &cli.state {
+        let input = inputs::state(path)?;
+        anyhow::ensure!(!query.trim().is_empty(), "query must not be empty");
+        output.begin(
+            json!({"mode": "state", "query": query, "version": env!("CARGO_PKG_VERSION"), "prompt_id": ev_grep_jev::context_prompt_id(), "provider": cli.provider, "requested_model": model, "min_confidence": cli.min_confidence, "dry_run": cli.dry_run, "jobs": cli.jobs}),
+        )?;
+        output.select_state(&input)?;
+        if cli.dry_run {
+            return Ok(());
+        }
+        let assessment = evaluator(cli, &model)?
+            .assess_context(&query, &input.state)
+            .await?;
+        return output.state_result(&input, &assessment);
+    }
     output.begin(
         json!({"query": query, "version": env!("CARGO_PKG_VERSION"), "prompt_id": ev_grep_jev::search_prompt_id(), "provider": cli.provider, "requested_model": model, "min_confidence": cli.min_confidence, "dry_run": cli.dry_run, "jobs": cli.jobs, "sort": cli.sort}),
     )?;
@@ -74,16 +89,7 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
             Some(input) => break input,
         }
     };
-    let key_name = cli.provider.key_variable();
-    let key = std::env::var(key_name)
-        .with_context(|| format!("set {key_name} for provider {}", cli.provider))?;
-    let jev = Jev::with_endpoint(
-        cli.provider,
-        &model,
-        &key,
-        cli.endpoint.as_deref().unwrap_or(cli.provider.endpoint()),
-    )?
-    .with_jobs(usize::from(cli.jobs))?;
+    let jev = evaluator(cli, &model)?;
     scan_inputs(
         stream::once(std::future::ready(first)).chain(inputs),
         &query,
@@ -93,4 +99,17 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
         |event| output.scan_event(event),
     )
     .await
+}
+
+fn evaluator(cli: &Cli, model: &str) -> Result<Jev> {
+    let key_name = cli.provider.key_variable();
+    let key = std::env::var(key_name)
+        .with_context(|| format!("set {key_name} for provider {}", cli.provider))?;
+    Jev::with_endpoint(
+        cli.provider,
+        model,
+        &key,
+        cli.endpoint.as_deref().unwrap_or(cli.provider.endpoint()),
+    )?
+    .with_jobs(usize::from(cli.jobs))
 }

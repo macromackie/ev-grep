@@ -14,7 +14,7 @@ The installer puts `ev-grep` in `~/.local/bin`. Add that directory to your `PATH
 You can also install a specific release with [mise](https://mise.jdx.dev/):
 
 ```sh
-mise use -g github:macromackie/ev-grep@0.5.0
+mise use -g github:macromackie/ev-grep@0.6.0
 ```
 
 Archives and checksums are on the [releases page](https://github.com/macromackie/ev-grep/releases).
@@ -28,7 +28,7 @@ export OPENROUTER_API_KEY='your-key'
 ev-grep 'Catches a database failure and returns an empty result' src/
 ```
 
-Queries, selected file contents, and any supporting sources go to the provider. Requests use your account and may incur charges.
+Queries and supplied source or state data go to the provider. Requests use your account and may incur charges.
 Use `--dry-run` to inspect file selection without an API key or network requests:
 
 ```sh
@@ -47,6 +47,16 @@ ev-grep 'Retries failed requests' src/client.ts:20-45 --context src/transport.ts
 
 Repeat `--context PATH[:N-M]` to attach more supporting files or line ranges to each candidate.
 
+Ask a question about a JSON value with `--state FILE`, or read it from stdin with `--state -`:
+
+```sh
+printf '%s\n' '{"job":{"status":"failed","attempts":3}}' \
+  | ev-grep 'Is the job marked failed?' --state - --json
+```
+
+State mode accepts one JSON value up to 64 KiB and reads no paths mentioned inside it. Add `--dry-run` to inspect the
+input without credentials or requests. The [CLI guide](docs/cli.md#assess-json-state) covers state input and output.
+
 ## Results
 
 Example output, showing only stdout:
@@ -58,7 +68,8 @@ src/actions.py   uncertain (model chose uncertain)
 
 `match` means the model judges that the file matches the query. `uncertain` means the model chose uncertain or its
 confidence fell below `--min-confidence` (default 0.8). Terminal output states which case occurred.
-Terminal output omits `no_match` files and writes a count summary to stderr. Use `--json` to include every assessment.
+Terminal output omits `no_match` files and writes a count summary to stderr. State mode prints every answer, including
+`no_match`. Use `--json` to retain every raw assessment and its routing decision.
 
 Put higher match probabilities first with `--sort score`:
 
@@ -77,6 +88,7 @@ ast-grep run --kind function_declaration --lang ts --json=stream src/ \
 ```
 
 JSON results contain exact source text and ranges, raw model answers, and separate routing decisions.
+Candidate records retain optional ast-grep `metaVariables` as selection metadata, excluded from model input.
 The [output guide](docs/output.md) shows score filters and completeness checks.
 
 Each candidate is evaluated on its own with its supplied supporting sources. ev-grep does not follow imports or run
