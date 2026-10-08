@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use ev_grep_core::{
     Candidate, FileError, Input, MAX_FILE_BYTES, Region, SourceRead, SupportingSource, Target,
-    discover, read_source, read_target, read_text,
+    discover, parse_json, read_source, read_target, read_text,
 };
 use futures_util::{Stream, stream};
 use serde::Serialize;
@@ -38,7 +38,7 @@ pub(crate) fn state(path: &Path) -> Result<StateInput> {
         };
         source.text
     };
-    let state: Value = serde_json::from_str(&text).context("expected one JSON state value")?;
+    let state = parse_json(text.as_bytes()).context("expected one JSON state value")?;
     let input_id = format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(&state)?));
     Ok(StateInput {
         state,
@@ -131,9 +131,11 @@ impl<R: tokio::io::AsyncBufRead + Unpin> CandidateLines<R> {
                     ))
                 }
                 Ok(_) if bytes.iter().all(u8::is_ascii_whitespace) => continue,
-                Ok(_) => serde_json::from_slice::<Candidate>(&bytes)
-                    .map_err(|_| {
-                        anyhow::anyhow!("expected candidate JSON with file, range, and text")
+                Ok(_) => parse_json(&bytes)
+                    .and_then(|value| {
+                        serde_json::from_value::<Candidate>(value).map_err(|_| {
+                            anyhow::anyhow!("expected candidate JSON with file, range, and text")
+                        })
                     })
                     .and_then(|candidate| {
                         candidate.validate()?;

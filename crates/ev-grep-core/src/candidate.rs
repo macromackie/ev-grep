@@ -72,10 +72,12 @@ impl Candidate {
         );
         self.range.validate(&self.text, self.context.as_deref())?;
         if let Some(metadata) = &self.meta_variables {
+            let bytes = serde_json::to_vec(metadata)?;
             ensure!(
-                serde_json::to_vec(metadata)?.len() <= MAX_FILE_BYTES,
+                bytes.len() <= MAX_FILE_BYTES,
                 "candidate metadata exceeds 65536 bytes; input was not truncated"
             );
+            crate::parse_json(&bytes)?;
         }
         for source in &self.supporting {
             source.validate()?;

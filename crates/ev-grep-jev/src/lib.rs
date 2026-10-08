@@ -131,6 +131,12 @@ impl Evaluator for Jev {
                 "question IDs must be unique and contain 1–64 bytes"
             );
         }
+        let state_bytes = serde_json::to_vec(state)?;
+        ensure!(
+            state_bytes.len() <= 96 * 1024,
+            "encoded state exceeds 98304 bytes; context was not truncated"
+        );
+        ev_grep_core::parse_json(&state_bytes)?;
         self.send(
             &protocol::context_request(&self.model, questions, state),
             &protocol::context_prompt_id(),

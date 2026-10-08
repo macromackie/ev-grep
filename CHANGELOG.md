@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.1
+
+- Reject JSON objects containing reserved parser keys instead of silently changing their values. This protects state
+  and candidate inputs, including nested objects, and the generic Rust assessment boundary. Ordinary JSON numbers
+  retain their precision.
+
 ## v0.6.0
 
 - Assess a supplied JSON value with `--state FILE` or `--state -`. State input is bounded to 64 KiB, preserves numeric

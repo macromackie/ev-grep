@@ -120,6 +120,12 @@ Each record is assessed independently, including repeated ranges in the same fil
 valid records still run. An oversized record or an unreadable stream stops input, retaining earlier results.
 `--stdin`, `--candidates`, `--state`, and path searches are separate input modes.
 
+## JSON input limits
+
+State values and candidate JSON records allow at most 128 nesting levels. They reject the object keys
+`$serde_json::private::Number` and `$serde_json::private::RawValue` at every depth, including JSON-escaped spellings.
+String values containing those names remain valid. These checks apply in addition to the existing byte limits.
+
 ## Preview a search
 
 ```sh

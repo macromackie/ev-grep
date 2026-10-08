@@ -71,6 +71,23 @@ async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> 
     let structured: Value = serde_json::from_slice(&requests[1].body)?;
     assert_eq!(structured["state"], state);
 
+    let nested = format!("{}0{}", "[".repeat(127), "]".repeat(127));
+    let state = ev_grep_core::parse_json(nested.as_bytes())?;
+    let result = evaluator
+        .assess_context("Is this an array?", &state)
+        .await?;
+    assert_eq!(result.choice, Outcome::Match);
+    let requests = server
+        .received_requests()
+        .await
+        .context("missing requests")?;
+    let envelope: std::collections::BTreeMap<String, &serde_json::value::RawValue> =
+        serde_json::from_slice(&requests[2].body)?;
+    assert_eq!(
+        envelope.get("state").context("missing state")?.get(),
+        nested
+    );
+
     Mock::given(path("/redirect"))
         .respond_with(
             ResponseTemplate::new(307)
@@ -315,7 +332,7 @@ async fn transient_failures_recover_but_retries_are_bounded() -> Result<()> {
 }
 
 #[tokio::test]
-async fn oversized_sources_and_encoded_requests_make_no_paid_request() -> Result<()> {
+async fn oversized_or_ambiguous_inputs_make_no_paid_request() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(500))
@@ -333,6 +350,26 @@ async fn oversized_sources_and_encoded_requests_make_no_paid_request() -> Result
         text: "save()".into(),
         focus: None,
     })?;
+    for key in [
+        "$serde_json::private::Number",
+        "$serde_json::private::RawValue",
+    ] {
+        let state = json!({"nested":[{key:"123"}]});
+        let error = evaluator
+            .assess_context("query", &state)
+            .await
+            .err()
+            .context("expected reserved state key error")?;
+        assert!(error.to_string().contains("reserved JSON object key"));
+        candidate.meta_variables = Some(state);
+        let error = evaluator
+            .assess("query", &candidate)
+            .await
+            .err()
+            .context("expected reserved metadata key error")?;
+        assert!(error.to_string().contains("reserved JSON object key"));
+    }
+    candidate.meta_variables = None;
     let text = "x".repeat(MAX_FILE_BYTES);
     candidate.supporting.push(SupportingSource {
         file: "not-on-disk.py".into(),

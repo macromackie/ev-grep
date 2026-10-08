@@ -3,6 +3,7 @@
 mod candidate;
 mod decision;
 mod discovery;
+mod json;
 mod region;
 mod scan;
 mod source;
@@ -13,6 +14,7 @@ pub use decision::{
     Assessment, DecisionBatch, MIN_CONFIDENCE, Outcome, Question, RequestInfo, Routing, Uncertainty,
 };
 pub use discovery::{Discovery, discover};
+pub use json::parse_json;
 pub use region::{Position, Region};
 pub use scan::{Evaluator, ScanEvent, scan_inputs};
 pub use source::{
