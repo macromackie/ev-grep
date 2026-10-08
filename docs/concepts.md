@@ -2,15 +2,18 @@
 
 A query describes what you want to find. ev-grep asks Jev about each selected file, text range, or stdin candidate.
 
-The same query accompanies each candidate; assessments do not share context.
+The same query accompanies each candidate. Candidates are assessed independently, even when they use the same
+supporting sources.
 
 ## File context
 
-An assessment receives the path and complete text of one file. A retry loop may be visible in `retry.ts`, while
-`client.ts` delegates to a transport defined elsewhere. The latter may need a person or review agent to investigate.
+An assessment receives the path and complete text of one file. If `client.ts` delegates to a transport in another
+file, add that source with `--context src/transport.ts`. You can repeat the option or select a supporting line range.
+Supporting sources can explain helpers and dependencies the target calls. Unrelated behavior in those sources cannot
+make the target match.
 
-ev-grep does not fetch dependencies, build an index, or compare revisions. Searching files from a PR examines their
-current contents, not whether the diff introduced a problem.
+ev-grep does not follow imports, fetch dependencies, build an index, or compare revisions. Searching files from a PR
+examines their current contents, not whether the diff introduced a problem.
 
 ## Part of a file
 
@@ -24,12 +27,18 @@ from `git diff` or ast-grep.
 
 Use ast-grep to select functions, types, or other syntax, then pass its JSONL to `--candidates -`.
 ev-grep assesses those exact regions. It does not generate matchers or ask the model to find line numbers.
-Candidate records may supply complete file context explicitly; paths in records are never opened.
+Candidate records may supply the complete original file as `context` and other sources as `supporting` entries.
+Paths in records are labels and are never opened. See [Search candidates](./cli.md#search-candidates) for the format.
 
 ## Decisions
 
-`match` retains a file. `no_match` omits it from terminal output. `uncertain` retains it for further review.
-All three appear in [JSON output](./output.md). A failed request is an error, not a decision.
+The model returns a choice, confidence, and probabilities for `match`, `no_match`, and `uncertain`. It returns no
+free-text explanation. The CLI separately routes answers below `--min-confidence` to `uncertain`; the default is 0.8.
+An explicit uncertain choice stays uncertain at any threshold.
+
+The routed outcome determines terminal output and exit codes. `match` retains a candidate, `no_match` omits it, and
+`uncertain` retains it for review. [JSON output](./output.md) includes every raw assessment and its routing decision.
+A failed request is an error, not a decision.
 
 Model results can be wrong. A search helps choose what to read; it does not prove that code follows a rule.
 

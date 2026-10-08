@@ -5,12 +5,12 @@ mod protocol;
 mod transport;
 
 pub use config::Provider;
-pub use protocol::MIN_CONFIDENCE;
+pub use protocol::search_prompt_id;
 
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use ev_grep_core::{Assessment, DecisionBatch, Evaluator, MAX_QUERY_BYTES, Question, Source};
+use ev_grep_core::{Assessment, Candidate, DecisionBatch, Evaluator, MAX_QUERY_BYTES, Question};
 use reqwest::{
     Client,
     header::{AUTHORIZATION, HeaderMap, HeaderValue},
@@ -22,7 +22,6 @@ pub struct Jev {
     endpoint: String,
     model: String,
     prompt: protocol::Prompt,
-    min_confidence: f64,
 }
 
 impl Jev {
@@ -70,17 +69,7 @@ impl Jev {
             endpoint: endpoint.into(),
             model: model.into(),
             prompt: protocol::prompt()?,
-            min_confidence: MIN_CONFIDENCE,
         })
-    }
-
-    pub fn with_min_confidence(mut self, minimum: f64) -> Result<Self> {
-        ensure!(
-            minimum.is_finite() && (0.0..=1.0).contains(&minimum),
-            "minimum confidence must be between 0 and 1"
-        );
-        self.min_confidence = minimum;
-        Ok(self)
     }
 
     pub fn with_jobs(mut self, jobs: usize) -> Result<Self> {
@@ -88,7 +77,7 @@ impl Jev {
         Ok(self)
     }
 
-    async fn send(&self, request: &serde_json::Value) -> Result<DecisionBatch> {
+    async fn send(&self, request: &serde_json::Value, prompt_id: &str) -> Result<DecisionBatch> {
         let body = serde_json::to_vec(request)?;
         ensure!(
             body.len() <= 96 * 1024,
@@ -107,6 +96,7 @@ impl Jev {
             })
             .await?;
         let mut batch = completed.value;
+        batch.request.prompt_id = Some(prompt_id.to_owned());
         batch.request.attempts = completed.attempts;
         batch.request.hedges = completed.hedges;
         batch.request.elapsed_ms = completed.elapsed_ms;
@@ -115,18 +105,11 @@ impl Jev {
 }
 
 impl Evaluator for Jev {
-    async fn assess(&self, query: &str, source: &Source) -> Result<Assessment> {
+    async fn assess(&self, query: &str, candidate: &Candidate) -> Result<Assessment> {
         validate_query(query)?;
-        let request = protocol::request(&self.model, &self.prompt, query, source);
-        Ok(self
-            .send(&request)
-            .await?
-            .into_single()?
-            .with_min_confidence(self.min_confidence))
-    }
-
-    async fn assess_context(&self, query: &str, state: &serde_json::Value) -> Result<Assessment> {
-        self.assess_questions(&[Question { id: "match", query }], state)
+        candidate.validate()?;
+        let request = protocol::request(&self.model, &self.prompt, query, candidate);
+        self.send(&request, &search_prompt_id())
             .await?
             .into_single()
     }
@@ -148,8 +131,11 @@ impl Evaluator for Jev {
                 "question IDs must be unique and contain 1–64 bytes"
             );
         }
-        self.send(&protocol::context_request(&self.model, questions, state))
-            .await
+        self.send(
+            &protocol::context_request(&self.model, questions, state),
+            &protocol::context_prompt_id(),
+        )
+        .await
     }
 }
 

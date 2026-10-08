@@ -108,13 +108,10 @@ fn validate(answer: Choice, model: &str) -> Result<Assessment> {
         "choice is not the highest probability"
     );
     Ok(Assessment {
-        outcome: answer.choice,
-        reason: None,
         choice: answer.choice,
         confidence: answer.confidence,
-        probabilities: answer.probabilities.clone(),
+        probabilities: answer.probabilities,
         model: model.to_owned(),
         request: None,
-    }
-    .with_min_confidence(0.0))
+    })
 }

@@ -66,7 +66,7 @@ async fn a_hedge_accepts_uncertainty_and_accounts_for_the_batch_once() -> Result
         result
             .answers
             .values()
-            .all(|a| a.outcome == Outcome::Uncertain && a.request.is_none())
+            .all(|a| a.choice == Outcome::Uncertain && a.request.is_none())
     );
     // Completing the race releases both slots, including the cancelled loser.
     let next = tokio::time::timeout(

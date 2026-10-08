@@ -14,7 +14,7 @@ The installer puts `ev-grep` in `~/.local/bin`. Add that directory to your `PATH
 You can also install a specific release with [mise](https://mise.jdx.dev/):
 
 ```sh
-mise use -g github:macromackie/ev-grep@0.4.4
+mise use -g github:macromackie/ev-grep@0.5.0
 ```
 
 Archives and checksums are on the [releases page](https://github.com/macromackie/ev-grep/releases).
@@ -28,7 +28,7 @@ export OPENROUTER_API_KEY='your-key'
 ev-grep 'Catches a database failure and returns an empty result' src/
 ```
 
-Queries and selected file contents go to the provider. Requests use your account and may incur charges.
+Queries, selected file contents, and any supporting sources go to the provider. Requests use your account and may incur charges.
 Use `--dry-run` to inspect file selection without an API key or network requests:
 
 ```sh
@@ -39,16 +39,25 @@ Add `:N-M` to a file path to assess only those lines, such as lines a branch cha
 `ev-grep 'Writes to the database' src/users.py:40-72`. The [pipelines guide](docs/pipelines.md) gets paths and ranges
 from `rg`, `git diff`, and ast-grep.
 
+Supply helpers or dependencies explicitly when the selected code needs them:
+
+```sh
+ev-grep 'Retries failed requests' src/client.ts:20-45 --context src/transport.ts
+```
+
+Repeat `--context PATH[:N-M]` to attach more supporting files or line ranges to each candidate.
+
 ## Results
 
 Example output, showing only stdout:
 
 ```text
 src/users.py     92% match
-src/actions.py   uncertain
+src/actions.py   uncertain (model chose uncertain)
 ```
 
-`match` means the model judges that the file matches the query. `uncertain` means it lacks enough context or confidence.
+`match` means the model judges that the file matches the query. `uncertain` means the model chose uncertain or its
+confidence fell below `--min-confidence` (default 0.8). Terminal output states which case occurred.
 Terminal output omits `no_match` files and writes a count summary to stderr. Use `--json` to include every assessment.
 
 Put higher match probabilities first with `--sort score`:
@@ -67,13 +76,14 @@ ast-grep run --kind function_declaration --lang ts --json=stream src/ \
   | ev-grep 'Retries a failed request' --candidates - --json
 ```
 
-JSON results contain exact text, source ranges, and probabilities for match, no-match, and uncertainty.
+JSON results contain exact source text and ranges, raw model answers, and separate routing decisions.
 The [output guide](docs/output.md) shows score filters and completeness checks.
 
-Each candidate is evaluated on its own. ev-grep does not read related files for context or run the code. Results can be
-wrong; use them to decide what to inspect. Request failures are reported as errors, not as `no_match`.
+Each candidate is evaluated on its own with its supplied supporting sources. ev-grep does not follow imports or run
+the code. Results can be wrong; use them to decide what to inspect. Request failures are reported as errors, not as
+`no_match`.
 
-See the [documentation](docs/README.md) for file filters, provider configuration, exit codes, JSONL output, and SARIF output.
+See the [documentation](docs/README.md) for file filters, provider configuration, exit codes and JSONL output.
 The same pages are available at [ev-grep.com/docs](https://ev-grep.com/docs).
 
 ## Build from source

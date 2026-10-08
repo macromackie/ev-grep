@@ -19,7 +19,13 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
     let stdout = io::stdout();
     let format = if cli.json { Format::Json } else { Format::Text };
-    let mut output = Output::new(stdout.lock(), format, cli.dry_run, cli.sort);
+    let mut output = Output::new(
+        stdout.lock(),
+        format,
+        cli.dry_run,
+        cli.sort,
+        cli.min_confidence,
+    );
     if let Err(error) = run(&cli, &mut output).await {
         if error
             .downcast_ref::<io::Error>()
@@ -41,15 +47,16 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
     let (query, arguments) = cli.query_and_targets()?;
     let model = cli.provider.model(cli.model.as_deref())?;
     output.begin(
-        json!({"provider": cli.provider, "requested_model": model, "min_confidence": cli.min_confidence, "dry_run": cli.dry_run, "jobs": cli.jobs, "sort": cli.sort}),
+        json!({"query": query, "version": env!("CARGO_PKG_VERSION"), "prompt_id": ev_grep_jev::search_prompt_id(), "provider": cli.provider, "requested_model": model, "min_confidence": cli.min_confidence, "dry_run": cli.dry_run, "jobs": cli.jobs, "sort": cli.sort}),
     )?;
+    let supporting = inputs::supporting(&cli.context)?;
     let (mut inputs, errors) = inputs::select(cli, &arguments).await?;
     for error in errors {
         output.error(Some(&error.path), error.lines, &error.message)?;
     }
     if cli.dry_run {
         while let Some(input) = inputs.next().await {
-            match input.load() {
+            match input.load(&supporting) {
                 Ok(Loaded::Candidate(candidate)) => output.selected(&candidate)?,
                 Ok(Loaded::Binary(target)) => output.scan_event(ScanEvent::Skipped {
                     path: target.path.display().to_string(),
@@ -76,11 +83,11 @@ async fn run(cli: &Cli, output: &mut Output<impl io::Write>) -> Result<()> {
         &key,
         cli.endpoint.as_deref().unwrap_or(cli.provider.endpoint()),
     )?
-    .with_min_confidence(cli.min_confidence)?
     .with_jobs(usize::from(cli.jobs))?;
     scan_inputs(
         stream::once(std::future::ready(first)).chain(inputs),
         &query,
+        &supporting,
         &jev,
         usize::from(cli.jobs),
         |event| output.scan_event(event),

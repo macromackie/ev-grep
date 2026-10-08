@@ -3,13 +3,13 @@ use std::future::Future;
 use anyhow::{Result, ensure};
 use futures_util::{Stream, StreamExt};
 
-use crate::{Assessment, Candidate, FileError, Input, LineRange, Loaded, Source};
+use crate::{Assessment, Candidate, FileError, Input, LineRange, Loaded, SupportingSource};
 
 pub trait Evaluator: Sync {
     fn assess(
         &self,
         query: &str,
-        source: &Source,
+        candidate: &Candidate,
     ) -> impl Future<Output = Result<Assessment>> + Send;
 
     fn assess_questions(
@@ -25,12 +25,9 @@ pub trait Evaluator: Sync {
         state: &serde_json::Value,
     ) -> impl Future<Output = Result<Assessment>> + Send {
         async move {
-            let source = Source {
-                path: "<context>".into(),
-                text: serde_json::to_string(state)?,
-                focus: None,
-            };
-            Ok(self.assess(query, &source).await?.with_min_confidence(0.0))
+            self.assess_questions(&[crate::Question { id: "match", query }], state)
+                .await?
+                .into_single()
         }
     }
 }
@@ -52,6 +49,7 @@ pub enum ScanEvent {
 pub async fn scan_inputs(
     inputs: impl Stream<Item = Input>,
     query: &str,
+    supporting: &[SupportingSource],
     evaluator: &impl Evaluator,
     jobs: usize,
     mut emit: impl FnMut(ScanEvent) -> Result<()>,
@@ -59,7 +57,7 @@ pub async fn scan_inputs(
     ensure!((1..=256).contains(&jobs), "jobs must be between 1 and 256");
     let pending = inputs
         .map(|input| async move {
-            let candidate = match input.load() {
+            let candidate = match input.load(supporting) {
                 Ok(Loaded::Candidate(candidate)) => candidate,
                 Ok(Loaded::Binary(target)) => {
                     return ScanEvent::Skipped {
@@ -69,7 +67,7 @@ pub async fn scan_inputs(
                 }
                 Err(error) => return ScanEvent::Error(error),
             };
-            match evaluator.assess(query, &candidate.source()).await {
+            match evaluator.assess(query, &candidate).await {
                 Ok(assessment) => ScanEvent::Result {
                     candidate,
                     assessment: Box::new(assessment),

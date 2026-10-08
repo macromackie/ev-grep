@@ -1,9 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    FileError, Focus, MAX_FILE_BYTES, Region, Source, SourceRead, Target, label, read_target,
-};
+use crate::{FileError, MAX_FILE_BYTES, Region, Source, SourceRead, Target, label, read_target};
 
 /// Caller-selected text. A file is an identifier; it is never opened by candidate evaluation.
 #[derive(Debug, Deserialize, Serialize)]
@@ -14,6 +12,39 @@ pub struct Candidate {
     /// Complete original file, supplied explicitly when the target needs surrounding context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supporting: Vec<SupportingSource>,
+}
+
+/// Explicit dependency evidence. The file is a label and is never read during assessment.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SupportingSource {
+    pub file: String,
+    pub range: Region,
+    pub text: String,
+}
+
+impl SupportingSource {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.file.is_empty() && !self.file.contains('\0'),
+            "invalid supporting file"
+        );
+        ensure!(
+            !self.text.contains('\0'),
+            "supporting source contains NUL bytes"
+        );
+        self.range.validate(&self.text, None)
+    }
+
+    pub fn from_source(source: Source) -> Result<Self> {
+        let candidate = Candidate::from_source(source)?;
+        Ok(Self {
+            file: candidate.file.context("missing supporting file")?,
+            range: candidate.range,
+            text: candidate.text,
+        })
+    }
 }
 
 impl Candidate {
@@ -36,11 +67,18 @@ impl Candidate {
                     .is_none_or(|text| !text.contains('\0')),
             "candidate contains NUL bytes"
         );
-        self.range.validate(&self.text, self.context.as_deref())
+        self.range.validate(&self.text, self.context.as_deref())?;
+        for source in &self.supporting {
+            source.validate()?;
+        }
+        Ok(())
     }
 
     pub fn bytes(&self) -> usize {
-        self.context.as_ref().map_or(self.text.len(), String::len)
+        self.supporting.iter().fold(
+            self.context.as_ref().map_or(self.text.len(), String::len),
+            |bytes, source| bytes.saturating_add(source.text.len()),
+        )
     }
 
     pub fn from_source(source: Source) -> Result<Self> {
@@ -70,20 +108,10 @@ impl Candidate {
             range,
             text,
             context,
+            supporting: Vec::new(),
         };
         candidate.validate()?;
         Ok(candidate)
-    }
-
-    pub fn source(&self) -> Source {
-        Source {
-            path: self.file.clone().unwrap_or_else(|| "<stdin>".into()),
-            text: self.context.as_ref().unwrap_or(&self.text).clone(),
-            focus: self.context.as_ref().map(|_| Focus {
-                lines: self.range.lines(),
-                text: self.text.clone(),
-            }),
-        }
     }
 
     pub fn label(&self) -> String {
@@ -106,7 +134,24 @@ pub enum Loaded {
 }
 
 impl Input {
-    pub fn load(self) -> Result<Loaded, FileError> {
+    pub fn load(self, supporting: &[SupportingSource]) -> Result<Loaded, FileError> {
+        let loaded = self.load_target()?;
+        if let Loaded::Candidate(mut candidate) = loaded {
+            candidate.supporting.extend_from_slice(supporting);
+            candidate.validate().map_err(|error| {
+                FileError::new(
+                    candidate.file.as_deref().unwrap_or("<stdin>"),
+                    Some(candidate.range.lines()),
+                    error,
+                )
+            })?;
+            Ok(Loaded::Candidate(candidate))
+        } else {
+            Ok(loaded)
+        }
+    }
+
+    fn load_target(self) -> Result<Loaded, FileError> {
         match self {
             Self::Error(error) => Err(error),
             Self::Candidate(candidate) => {

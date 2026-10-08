@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 
-use ev_grep_core::{
-    Assessment, Candidate, LineRange, Outcome, Position, Region, ScanEvent, Uncertainty,
-};
+use ev_grep_core::{Assessment, Candidate, LineRange, Outcome, Position, Region, ScanEvent};
 use serde_json::Value;
 
 use super::{Format, Output, Sort};
@@ -24,18 +22,13 @@ fn candidate(path: &str, lines: Option<LineRange>) -> Candidate {
             byte_offset: None,
         },
         context: None,
+        supporting: Vec::new(),
     }
 }
 
-fn assessment(outcome: Outcome, reason: Option<Uncertainty>, confidence: f64) -> Assessment {
+fn assessment(outcome: Outcome, confidence: f64) -> Assessment {
     Assessment {
-        outcome,
-        reason,
-        choice: if outcome == Outcome::Uncertain {
-            Outcome::Match
-        } else {
-            outcome
-        },
+        choice: outcome,
         confidence,
         probabilities: BTreeMap::from([(outcome, confidence)]),
         model: "fixture".into(),
@@ -51,7 +44,7 @@ fn assessment(outcome: Outcome, reason: Option<Uncertainty>, confidence: f64) ->
 fn score_order_preserves_assessments_and_summary() -> anyhow::Result<()> {
     let mut runs = Vec::new();
     for sort in [Sort::None, Sort::Score] {
-        let mut output = Output::new(Vec::new(), Format::Json, false, sort);
+        let mut output = Output::new(Vec::new(), Format::Json, false, sort, 0.8);
         for (path, line, probability, confidence) in [
             ("a.rs", 10, 0.9, 0.9),
             ("d.rs", 1, 0.01, 0.98),
@@ -64,7 +57,7 @@ fn score_order_preserves_assessments_and_summary() -> anyhow::Result<()> {
             } else {
                 Outcome::NoMatch
             };
-            let mut answer = assessment(choice, None, confidence);
+            let mut answer = assessment(choice, confidence);
             answer.probabilities = BTreeMap::from([
                 (Outcome::Match, probability),
                 (Outcome::NoMatch, 1.0 - probability),
@@ -78,7 +71,7 @@ fn score_order_preserves_assessments_and_summary() -> anyhow::Result<()> {
                         end: line,
                     }),
                 ),
-                assessment: Box::new(answer.with_min_confidence(0.8)),
+                assessment: Box::new(answer),
             })?;
         }
         output.error(Some("failed.rs"), None, "request failed")?;
@@ -104,12 +97,10 @@ fn score_order_preserves_assessments_and_summary() -> anyhow::Result<()> {
 
 #[test]
 fn json_retains_uncertainty_and_errors_take_exit_precedence() -> anyhow::Result<()> {
-    let mut output = Output::new(Vec::new(), Format::Json, false, Sort::None);
+    let mut output = Output::new(Vec::new(), Format::Json, false, Sort::None, 0.8);
     output.scan_event(ScanEvent::Result {
         candidate: candidate("a.py", Some(LineRange { start: 3, end: 9 })),
         assessment: Box::new(Assessment {
-            outcome: Outcome::Uncertain,
-            reason: Some(Uncertainty::LowConfidence),
             choice: Outcome::NoMatch,
             confidence: 0.5,
             probabilities: BTreeMap::from([
@@ -138,8 +129,58 @@ fn json_retains_uncertainty_and_errors_take_exit_precedence() -> anyhow::Result<
     assert_eq!(records[0]["data"]["file"], "a.py");
     assert_eq!(records[0]["data"]["assessment"]["choice"], "no_match");
     assert!(records[0]["data"]["assessment"].get("outcome").is_none());
+    assert_eq!(records[0]["data"]["routing"]["outcome"], "uncertain");
+    assert_eq!(records[0]["data"]["routing"]["reason"], "low_confidence");
     assert_eq!(records[2]["type"], "summary");
     assert_eq!(records[2]["data"]["errors"], 1);
     assert_eq!(records[2]["data"]["selected"], 2);
+    Ok(())
+}
+
+#[test]
+fn uncertainty_reports_the_model_choice_or_the_exact_routing_threshold() -> anyhow::Result<()> {
+    for (choice, confidence, threshold, reason, explanation) in [
+        (
+            Outcome::Uncertain,
+            0.99,
+            0.0,
+            "model_uncertain",
+            "model chose uncertain",
+        ),
+        (
+            Outcome::NoMatch,
+            0.8001,
+            0.8002,
+            "low_confidence",
+            "model chose no_match; confidence 0.8001 < 0.8002",
+        ),
+    ] {
+        let answer = assessment(choice, confidence);
+        let original = serde_json::to_value(&answer)?;
+        for format in [Format::Text, Format::Json] {
+            let mut output = Output::new(Vec::new(), format, false, Sort::None, threshold);
+            output.scan_event(ScanEvent::Result {
+                candidate: candidate("sample.py", None),
+                assessment: Box::new(answer.clone()),
+            })?;
+            assert_eq!(output.finish()?, 3);
+            if format == Format::Text {
+                assert!(std::str::from_utf8(&output.writer)?.contains(explanation));
+            } else {
+                let first = std::str::from_utf8(&output.writer)?
+                    .lines()
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("missing result"))?;
+                let record: Value = serde_json::from_str(first)?;
+                assert_eq!(record["data"]["routing"]["reason"], reason);
+                assert_eq!(record["data"]["assessment"]["choice"], original["choice"]);
+                assert_eq!(
+                    record["data"]["assessment"]["probabilities"],
+                    original["probabilities"]
+                );
+            }
+        }
+        assert_eq!(serde_json::to_value(&answer)?, original);
+    }
     Ok(())
 }

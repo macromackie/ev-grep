@@ -8,8 +8,10 @@ mod scan;
 mod source;
 mod target;
 
-pub use candidate::{Candidate, Input, Loaded};
-pub use decision::{DecisionBatch, Question, RequestInfo};
+pub use candidate::{Candidate, Input, Loaded, SupportingSource};
+pub use decision::{
+    Assessment, DecisionBatch, MIN_CONFIDENCE, Outcome, Question, RequestInfo, Routing, Uncertainty,
+};
 pub use discovery::{Discovery, discover};
 pub use region::{Position, Region};
 pub use scan::{Evaluator, ScanEvent, scan_inputs};
@@ -18,56 +20,7 @@ pub use source::{
 };
 pub use target::{LineRange, Target, label};
 
-use std::{collections::BTreeMap, fmt::Display};
-
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Outcome {
-    Match,
-    NoMatch,
-    Uncertain,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Uncertainty {
-    InsufficientContext,
-    LowConfidence,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Assessment {
-    pub outcome: Outcome,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<Uncertainty>,
-    pub choice: Outcome,
-    pub confidence: f64,
-    pub probabilities: BTreeMap<Outcome, f64>,
-    pub model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request: Option<RequestInfo>,
-}
-
-impl Assessment {
-    /// Apply a caller's routing policy without losing the provider's answer.
-    pub fn with_min_confidence(mut self, minimum: f64) -> Self {
-        self.reason = if self.choice == Outcome::Uncertain {
-            Some(Uncertainty::InsufficientContext)
-        } else if self.confidence < minimum {
-            Some(Uncertainty::LowConfidence)
-        } else {
-            None
-        };
-        self.outcome = if self.reason.is_some() {
-            Outcome::Uncertain
-        } else {
-            self.choice
-        };
-        self
-    }
-}
+use std::fmt::Display;
 
 #[derive(Debug)]
 pub struct FileError {

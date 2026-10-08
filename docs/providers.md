@@ -30,6 +30,10 @@ Set `EV_GREP_PROVIDER` and `EV_GREP_MODEL` for shell defaults. Flags override th
 
 ## Requests
 
-Each request contains the query, path, and complete contents of one file. Files are assessed independently; ev-grep does not retrieve related code. Requests may incur provider charges.
+Each request contains the query, candidate text and location, any supplied original file context, and explicit
+supporting sources. Path searches supply the complete candidate file even when a range narrows the target.
+Candidates are assessed independently; ev-grep does not retrieve related code. Requests may incur provider charges.
 
-The adapter uses OpenRouter's Decisions endpoint or TypeSafe's System One endpoint. It does not retry failures, follow redirects, or fall back to another provider. Custom endpoints and automatic `.env` loading are not supported.
+The adapter uses OpenRouter's Decisions endpoint or TypeSafe's System One endpoint. Retries stay within the
+[request limits](./limits.md) and use the same provider and model. It does not follow redirects or fall back to
+another provider. Custom endpoints and automatic `.env` loading are not supported.

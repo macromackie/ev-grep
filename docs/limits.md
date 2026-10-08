@@ -5,13 +5,18 @@
 | Concurrent requests | 4 by default; `--jobs 1..256` |
 | Individual attempt timeout | 5 seconds |
 | Assessment timeout, including retries | 15 seconds |
-| File, stdin text, or candidate source including context | 64 KiB |
+| Each source file read from disk | 64 KiB |
+| Candidate original source plus all supporting text | 64 KiB |
 | Encoded candidate JSON line | 512 KiB |
 | Query | 8 KiB |
 | Encoded request | 96 KiB |
 | Response | 64 KiB |
 
 Exceeding a limit produces an error. Content is never silently truncated.
+
+The combined source limit counts `context` when present, otherwise candidate `text`, plus the `text` of every
+`supporting` entry. A supporting line range sends only those lines, but the complete file must pass the source-file
+limit before selection. The separate encoded-request limit includes the query, labels, and JSON encoding.
 
 Transient connection, body-read, and HTTP errors get up to three attempts within one 15-second budget.
 After one second, ev-grep may start one duplicate request if the shared `--jobs` pool has spare capacity.
@@ -21,8 +26,8 @@ A response that fails validation, such as probabilities that do not sum to one, 
 becomes a result. Authentication errors are not retried. All attempts use the same input, provider, and model.
 
 TypeSafe publishes per-account limits of 40 requests and 100K input tokens per second and adjusts them with demand.
-Function candidates with file context resend the whole file for each function, so a high `--jobs` value can reach the
-token limit. If searches report HTTP 429, lower `--jobs`.
+Function candidates with file context resend the whole file and supporting sources for each function. A high `--jobs`
+value can reach the token limit. If searches report HTTP 429, lower `--jobs`.
 
 Duplicate or interrupted requests may still incur charges. JSON request metadata reports attempts, hedges,
 elapsed time, and usage from the winning response; it is not a complete billing record.
@@ -36,6 +41,8 @@ Stdin and JSON candidates containing NUL bytes are errors. Empty stdin is one te
 
 ## Context
 
-Each assessment sees the supplied candidate and any explicit file context. A question about architecture, relationships between files, or whether a diff introduced a bug may need more context than ev-grep provides.
+Each assessment sees the supplied candidate, its original file context when provided, and any explicit supporting
+sources. ev-grep does not follow imports. A question about architecture or whether a diff introduced a bug may need
+more evidence than the supplied sources provide.
 
 Use `uncertain` results as a reason to investigate. A `no_match` is a model assessment, not proof that a codebase has no issues.

@@ -1,10 +1,8 @@
 use anyhow::{Context, Result, ensure};
-use ev_grep_core::Source;
+use ev_grep_core::Candidate;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-
-// This is a conservative routing policy, not a claim of calibrated accuracy.
-pub const MIN_CONFIDENCE: f64 = 0.8;
+use sha2::{Digest, Sha256};
 
 /// Prompt experiments edit this file and rebuild, so candidates run through the shipped request path.
 const PROMPT: &str = include_str!("../prompt.json");
@@ -15,6 +13,7 @@ pub(crate) struct Prompt {
     pub(crate) task: String,
     /// Added to the instructions only when a line range narrows the search.
     pub(crate) focus: String,
+    pub(crate) supporting: String,
     pub(crate) criteria: Criteria,
 }
 
@@ -38,6 +37,7 @@ pub(crate) fn parse_prompt(text: &str) -> Result<Prompt> {
         [
             &prompt.task,
             &prompt.focus,
+            &prompt.supporting,
             &criteria.matches,
             &criteria.no_match,
             &criteria.uncertain
@@ -50,16 +50,21 @@ pub(crate) fn parse_prompt(text: &str) -> Result<Prompt> {
 }
 
 /// A ranged search sends the whole file plus the focus lines as text, because models count lines poorly.
-pub(crate) fn request(model: &str, prompt: &Prompt, query: &str, source: &Source) -> Value {
-    let mut state = json!({ "path": source.path, "source": source.text });
+pub(crate) fn request(model: &str, prompt: &Prompt, query: &str, candidate: &Candidate) -> Value {
+    let mut state = json!({ "path": candidate.file.as_deref().unwrap_or("<stdin>"), "source": candidate.context.as_ref().unwrap_or(&candidate.text) });
     let mut instructions = json!({ "task": prompt.task, "query": query });
-    if let Some(focus) = &source.focus {
+    if candidate.context.is_some() {
+        let lines = candidate.range.lines();
         state["focus"] = json!({
-            "start_line": focus.lines.start,
-            "end_line": focus.lines.end,
-            "text": focus.text
+            "start_line": lines.start,
+            "end_line": lines.end,
+            "text": candidate.text
         });
         instructions["focus"] = json!(prompt.focus);
+    }
+    if !candidate.supporting.is_empty() {
+        state["supporting"] = json!(candidate.supporting);
+        instructions["supporting"] = json!(prompt.supporting);
     }
     json!({
         "model": model,
@@ -92,4 +97,20 @@ pub(crate) fn context_request(
         }
     }))).collect();
     json!({"model": model, "state": state, "questions": questions})
+}
+
+pub fn search_prompt_id() -> String {
+    format!("sha256:{:x}", Sha256::digest(PROMPT.as_bytes()))
+}
+
+pub(crate) fn context_prompt_id() -> String {
+    let request = context_request(
+        "",
+        &[ev_grep_core::Question { id: "", query: "" }],
+        &Value::Null,
+    );
+    format!(
+        "sha256:{:x}",
+        Sha256::digest(request["questions"][""].to_string().as_bytes())
+    )
 }

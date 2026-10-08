@@ -28,6 +28,21 @@ Ranges apply to regular files. A range that starts at 0, ends before it starts, 
 
 Results print the range after the path, as in `src/users.py:20-56`. That is the same form ev-grep accepts, so results can feed another command.
 
+## Supply supporting sources
+
+```sh
+ev-grep 'Retries failed requests' src/client.ts:20-45 \
+  --context src/transport.ts --context src/retry.ts:10-38
+```
+
+Repeat `--context PATH[:N-M]` to attach supporting files or line ranges to every candidate. Use it when the selected
+code calls a helper or dependency defined elsewhere. The model judges the selected code; unrelated behavior in a
+supporting source cannot make it match. ev-grep does not follow imports or find dependencies automatically.
+
+The option works with paths, `--stdin`, and `--candidates`. Each context path must name a regular text file, and ranges
+use the same rules as candidate paths. The candidate's original source and all supporting text share a 64 KiB limit.
+Even a supporting range requires its full source file to fit within 64 KiB. See [Request limits](./limits.md).
+
 ## Read a query from a file
 
 ```sh
@@ -56,9 +71,19 @@ ast-grep run --kind function_declaration --lang ts --json=stream src/ \
 Each JSON line is one candidate. `--candidates candidates.jsonl` reads from a file instead. Records use ast-grep's
 `file`, `range`, and `text` fields. Extra metadata is ignored. A JSON array is not accepted; use `--json=stream`.
 
-Only the supplied text is assessed. ev-grep never opens paths from candidate records. To include file context, add
+ev-grep never opens paths from candidate records. To include file context, add
 `context` containing the complete original file; its selected slice must equal `text`. Positions count lines and
 Unicode characters from zero, with an exclusive end. Optional byte offsets count UTF-8 bytes.
+
+Add `supporting` to supply other source text directly. Each entry has a `file` label, `range`, and `text`; its range
+uses the same coordinates as the candidate. For example:
+
+```json
+{"file":"src/client.py","range":{"start":{"line":19,"column":0},"end":{"line":20,"column":0}},"text":"    return fetch()\n","supporting":[{"file":"src/db.py","range":{"start":{"line":9,"column":0},"end":{"line":10,"column":0}},"text":"def fetch(): return []\n"}]}
+```
+
+`supporting` defaults to an empty list and is omitted from output when empty. Its file labels are never opened.
+`--context` adds the same supporting sources to each input record, alongside any entries already in that record.
 
 Each record is assessed independently, including repeated ranges in the same file. Malformed records produce errors;
 valid records still run. An oversized record or an unreadable stream stops input, retaining earlier results.
@@ -70,7 +95,8 @@ valid records still run. An oversized record or an unreadable stream stops input
 ev-grep 'Performs database operations' src/ --dry-run
 ```
 
-A dry run lists selected text files and line ranges with the size of each file. It makes no API requests and needs no key.
+A dry run lists selected text files and line ranges with their combined source sizes. Add `--json` to inspect the
+exact candidate and supporting text. It makes no API requests and needs no key.
 
 ## Sort results
 
@@ -79,7 +105,7 @@ ev-grep 'Retries failed requests with a delay' src/ --sort score
 ```
 
 `--sort score` waits for the search to finish and lists the highest match probabilities first. Ties sort by path,
-then numeric source position. It works with text, JSONL, and SARIF. Scores, uncertainty, and exit codes stay the same.
+then numeric source position. It works with text and JSONL. Scores, uncertainty, and exit codes stay the same.
 The default, `--sort none`, emits results as requests finish.
 
 Sorting buffers results in memory and makes no extra model requests. JSONL errors and skips are still reported as
@@ -105,6 +131,7 @@ ev-grep [OPTIONS] --query-file <FILE> [PATHS]...
 | `-f, --query-file FILE` | Read one query from a file; `-` reads stdin |
 | `--stdin` | Assess stdin as one text candidate |
 | `--candidates FILE` | Read candidate JSON Lines; `-` reads stdin |
+| `--context PATH[:N-M]` | Attach a supporting file or line range to every candidate; repeat to add sources |
 | `-g, --glob GLOB` | Filter paths; repeat to add filters, prefix with `!` to exclude |
 | `--provider PROVIDER` | `openrouter` (default) or `typesafe` |
 | `--model MODEL` | A supported pinned model for the selected provider |
@@ -119,4 +146,4 @@ ev-grep [OPTIONS] --query-file <FILE> [PATHS]...
 Empty queries fail. Directory symlinks are not followed; explicit symlinks and special files are errors.
 Paths and text must be valid UTF-8. Files containing NUL bytes are skipped as binary. Other invalid UTF-8 inputs are errors.
 
-See [Output](./output.md) for exit codes, JSONL, and SARIF, and [Request limits](./limits.md) for size limits.
+See [Output](./output.md) for exit codes and JSONL, and [Request limits](./limits.md) for size limits.

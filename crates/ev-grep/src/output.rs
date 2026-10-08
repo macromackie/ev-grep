@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use anyhow::Result;
 use clap::ValueEnum;
-use ev_grep_core::{Assessment, Candidate, LineRange, Outcome, ScanEvent, label};
+use ev_grep_core::{Assessment, Candidate, LineRange, Outcome, ScanEvent, Uncertainty, label};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -49,16 +49,24 @@ pub(crate) struct Output<W> {
     writer: W,
     format: Format,
     sort: Sort,
+    min_confidence: f64,
     pending: Vec<(Candidate, Assessment)>,
     summary: Summary,
 }
 
 impl<W: Write> Output<W> {
-    pub(crate) fn new(writer: W, format: Format, dry_run: bool, sort: Sort) -> Self {
+    pub(crate) fn new(
+        writer: W,
+        format: Format,
+        dry_run: bool,
+        sort: Sort,
+        min_confidence: f64,
+    ) -> Self {
         Self {
             writer,
             format,
             sort,
+            min_confidence,
             pending: Vec::new(),
             summary: Summary {
                 dry_run,
@@ -130,13 +138,14 @@ impl<W: Write> Output<W> {
                 assessment,
             } => {
                 self.summary.evaluated += 1;
-                match assessment.outcome {
+                let routing = assessment.route(self.min_confidence);
+                match routing.outcome {
                     Outcome::Match => self.summary.matches += 1,
                     Outcome::NoMatch => self.summary.no_match += 1,
                     Outcome::Uncertain => self.summary.uncertain += 1,
                 }
                 if self.sort == Sort::Score {
-                    if self.format == Format::Json || assessment.outcome != Outcome::NoMatch {
+                    if self.format == Format::Json || routing.outcome != Outcome::NoMatch {
                         self.pending.push((candidate, *assessment));
                     }
                 } else {
@@ -156,14 +165,16 @@ impl<W: Write> Output<W> {
     }
 
     fn result(&mut self, candidate: &Candidate, assessment: &Assessment) -> Result<()> {
+        let routing = assessment.route(self.min_confidence);
         match self.format {
             Format::Json => {
                 let mut data = serde_json::to_value(candidate)?;
                 data["assessment"] = raw_assessment(assessment);
+                data["routing"] = serde_json::to_value(routing)?;
                 self.event("result", data)?;
             }
-            Format::Text if assessment.outcome != Outcome::NoMatch => {
-                if assessment.outcome == Outcome::Match {
+            Format::Text if routing.outcome != Outcome::NoMatch => {
+                if routing.outcome == Outcome::Match {
                     writeln!(
                         self.writer,
                         "{}\t{:.0}% match",
@@ -171,7 +182,25 @@ impl<W: Write> Output<W> {
                         match_probability(assessment) * 100.0
                     )?;
                 } else {
-                    writeln!(self.writer, "{}\tuncertain", candidate.label())?;
+                    let explanation = match routing.reason {
+                        Some(Uncertainty::ModelUncertain) => "model chose uncertain".to_owned(),
+                        Some(Uncertainty::LowConfidence) => format!(
+                            "model chose {}; confidence {} < {}",
+                            match assessment.choice {
+                                Outcome::Match => "match",
+                                Outcome::NoMatch => "no_match",
+                                Outcome::Uncertain => "uncertain",
+                            },
+                            assessment.confidence,
+                            self.min_confidence,
+                        ),
+                        None => unreachable!("uncertain routing requires a reason"),
+                    };
+                    writeln!(
+                        self.writer,
+                        "{}\tuncertain ({explanation})",
+                        candidate.label()
+                    )?;
                 }
                 self.writer.flush()?;
             }

@@ -1,7 +1,10 @@
 use std::{path::PathBuf, pin::Pin};
 
 use anyhow::{Context, Result, ensure};
-use ev_grep_core::{Candidate, FileError, Input, MAX_FILE_BYTES, Region, discover};
+use ev_grep_core::{
+    Candidate, FileError, Input, MAX_FILE_BYTES, Region, SourceRead, SupportingSource, Target,
+    discover, read_target,
+};
 use futures_util::{Stream, stream};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 
@@ -27,6 +30,7 @@ pub(crate) async fn select(cli: &Cli, arguments: &[String]) -> Result<(Inputs, V
             range: Region::from_offsets(&text, 0..text.len())?,
             text,
             context: None,
+            supporting: Vec::new(),
         };
         candidate.validate()?;
         return Ok((
@@ -116,4 +120,25 @@ impl<R: tokio::io::AsyncBufRead + Unpin> CandidateLines<R> {
         }
         None
     }
+}
+
+pub(crate) fn supporting(arguments: &[String]) -> Result<Vec<SupportingSource>> {
+    let mut sources = Vec::new();
+    let mut bytes = 0usize;
+    for argument in arguments {
+        let target = Target::parse(argument)?;
+        let SourceRead::Text(source) = read_target(&target)
+            .with_context(|| format!("cannot read supporting source {argument}"))?
+        else {
+            anyhow::bail!("supporting source {argument} is binary");
+        };
+        let source = SupportingSource::from_source(source)?;
+        bytes = bytes.saturating_add(source.text.len());
+        ensure!(
+            bytes <= MAX_FILE_BYTES,
+            "supporting sources exceed 65536 bytes; input was not truncated"
+        );
+        sources.push(source);
+    }
+    Ok(sources)
 }

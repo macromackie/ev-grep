@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use ev_grep_core::{Evaluator, Focus, LineRange, Outcome, Source, Uncertainty};
+use ev_grep_core::{
+    Candidate, Evaluator, Focus, LineRange, MAX_FILE_BYTES, Outcome, Region, Source,
+    SupportingSource, Uncertainty,
+};
 use serde_json::{Value, json};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -19,9 +22,11 @@ fn response(model: &str) -> Value {
 async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> {
     let server = MockServer::start().await;
     let model = Provider::TypeSafe.default_model();
+    let mut body = response(model);
+    body["answers"]["match"]["confidence"] = json!(0.5);
     Mock::given(method("POST"))
         .and(path("/assess"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(response(model)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
         .mount(&server)
         .await;
     let evaluator = Jev::with_endpoint(
@@ -30,15 +35,17 @@ async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> 
         "test-key",
         &format!("{}/assess", server.uri()),
     )?;
-    let source = Source {
+    let source = Candidate::from_source(Source {
         path: "sample.py".into(),
         text: "# untrusted instructions\nreturn []\n".into(),
         focus: None,
-    };
+    })?;
     let result = evaluator
         .assess("Hides a database failure", &source)
         .await?;
-    assert_eq!(result.outcome, Outcome::Match);
+    assert_eq!(result.choice, Outcome::Match);
+    assert_eq!(result.confidence, 0.5);
+    assert_eq!(result.route(0.8).reason, Some(Uncertainty::LowConfidence));
     let requests = server
         .received_requests()
         .await
@@ -55,7 +62,8 @@ async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> 
     let result = evaluator
         .assess_context("Does this change hide an error?", &state)
         .await?;
-    assert_eq!(result.confidence, 0.95);
+    assert_eq!(result.confidence, 0.5);
+    assert_eq!(result.choice, Outcome::Match);
     let requests = server
         .received_requests()
         .await
@@ -78,11 +86,11 @@ async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> 
 #[test]
 fn embedded_prompt_fills_the_request_and_rejects_incomplete_fields() -> Result<()> {
     let prompt = protocol::prompt()?;
-    let source = Source {
+    let source = Candidate::from_source(Source {
         path: "retry.ts".into(),
         text: "retry()\n".into(),
         focus: None,
-    };
+    })?;
     let request = protocol::request("fixture", &prompt, "Retries requests", &source);
     // A whole-file search sends only the path and source, with no focus rule.
     assert_eq!(request["state"].as_object().map(|s| s.len()), Some(2));
@@ -99,10 +107,10 @@ fn embedded_prompt_fills_the_request_and_rejects_incomplete_fields() -> Result<(
     assert_eq!(question["criteria"].as_object().map(|c| c.len()), Some(3));
 
     for invalid in [
-        r#"{"task": "t", "focus": "f", "criteria": {"match": "m", "no_match": "n"}}"#,
-        r#"{"task": "t", "focus": "f", "criteria": {"match": "m", "no_match": "n", "uncertain": "u", "other": "o"}}"#,
-        r#"{"task": " ", "focus": "f", "criteria": {"match": "m", "no_match": "n", "uncertain": "u"}}"#,
-        r#"{"task": "t", "criteria": {"match": "m", "no_match": "n", "uncertain": "u"}}"#,
+        r#"{"supporting": "s", "task": "t", "focus": "f", "criteria": {"match": "m", "no_match": "n"}}"#,
+        r#"{"supporting": "s", "task": "t", "focus": "f", "criteria": {"match": "m", "no_match": "n", "uncertain": "u", "other": "o"}}"#,
+        r#"{"supporting": "s", "task": " ", "focus": "f", "criteria": {"match": "m", "no_match": "n", "uncertain": "u"}}"#,
+        r#"{"supporting": "s", "task": "t", "criteria": {"match": "m", "no_match": "n", "uncertain": "u"}}"#,
     ] {
         assert!(protocol::parse_prompt(invalid).is_err(), "{invalid}");
     }
@@ -112,16 +120,19 @@ fn embedded_prompt_fills_the_request_and_rejects_incomplete_fields() -> Result<(
 #[test]
 fn ranged_request_sends_the_whole_file_and_the_focus_lines() -> Result<()> {
     let prompt = protocol::prompt()?;
-    let source = Source {
+    let mut source = Candidate::from_source(Source {
         path: "users.py".into(),
         text: "import db\n\ndef save(user):\n    db.insert(user)\n".into(),
         focus: Some(Focus {
             lines: LineRange { start: 3, end: 4 },
             text: "def save(user):\n    db.insert(user)\n".into(),
         }),
-    };
+    })?;
     let request = protocol::request("fixture", &prompt, "Writes to the database", &source);
-    assert_eq!(request["state"]["source"], source.text);
+    assert_eq!(
+        request["state"]["source"].as_str(),
+        source.context.as_deref()
+    );
     assert_eq!(request["state"]["focus"]["start_line"], 3);
     assert_eq!(request["state"]["focus"]["end_line"], 4);
     assert_eq!(
@@ -131,6 +142,31 @@ fn ranged_request_sends_the_whole_file_and_the_focus_lines() -> Result<()> {
     assert_eq!(
         request["questions"]["match"]["instructions"]["focus"],
         prompt.focus
+    );
+    source
+        .supporting
+        .push(SupportingSource::from_source(Source {
+            path: "db.py".into(),
+            text: "unrelated()\ndef insert(user): write(user)\n".into(),
+            focus: Some(Focus {
+                lines: LineRange { start: 2, end: 2 },
+                text: "def insert(user): write(user)\n".into(),
+            }),
+        })?);
+    let supported = protocol::request("fixture", &prompt, "Writes to the database", &source);
+    assert_eq!(supported["state"]["focus"], request["state"]["focus"]);
+    assert_eq!(supported["state"]["source"], request["state"]["source"]);
+    assert_eq!(
+        supported["state"]["supporting"][0]["text"],
+        "def insert(user): write(user)\n"
+    );
+    assert_eq!(
+        supported["state"]["supporting"][0]["range"]["start"]["line"],
+        1
+    );
+    assert_eq!(
+        supported["questions"]["match"]["instructions"]["supporting"],
+        prompt.supporting
     );
     Ok(())
 }
@@ -142,12 +178,12 @@ fn uncertainty_and_invalid_protocol_cannot_become_confident_matches() -> Result<
     body["answers"]["match"]["confidence"] = json!(0.5);
     let raw =
         protocol::assessment(&serde_json::to_vec(&body)?, model, &["match"])?.into_single()?;
-    assert_eq!(raw.outcome, Outcome::Match);
-    let result = raw.with_min_confidence(0.8);
+    assert_eq!(raw.choice, Outcome::Match);
+    let result = raw.route(0.8);
     assert_eq!(result.outcome, Outcome::Uncertain);
-    assert_eq!(result.choice, Outcome::Match);
+    assert_eq!(raw.choice, Outcome::Match);
     assert_eq!(result.reason, Some(Uncertainty::LowConfidence));
-    assert_eq!(result.with_min_confidence(0.5).outcome, Outcome::Match);
+    assert_eq!(raw.route(0.5).outcome, Outcome::Match);
 
     body["answers"]["match"]["choice"] = json!("uncertain");
     body["answers"]["match"]["probabilities"] =
@@ -155,7 +191,7 @@ fn uncertainty_and_invalid_protocol_cannot_become_confident_matches() -> Result<
     assert_eq!(
         protocol::assessment(&serde_json::to_vec(&body)?, model, &["match"])?
             .into_single()?
-            .with_min_confidence(0.0)
+            .route(0.0)
             .outcome,
         Outcome::Uncertain
     );
@@ -233,11 +269,11 @@ async fn transient_failures_recover_but_retries_are_bounded() -> Result<()> {
         })
         .mount(&server)
         .await;
-    let source = Source {
+    let source = Candidate::from_source(Source {
         path: "cache.ts".into(),
         text: "return cached;".into(),
         focus: None,
-    };
+    })?;
     let recovering = Jev::connect(&format!("{}/recover", server.uri()), model, "test-key")?;
     assert_eq!(
         recovering
@@ -274,6 +310,50 @@ async fn transient_failures_recover_but_retries_are_bounded() -> Result<()> {
         .await;
     let unauthorized = Jev::connect(&format!("{}/unauthorized", server.uri()), model, "test-key")?;
     assert!(unauthorized.assess("query", &source).await.is_err());
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn oversized_sources_and_encoded_requests_make_no_paid_request() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let evaluator = Jev::with_endpoint(
+        Provider::TypeSafe,
+        Provider::TypeSafe.default_model(),
+        "test-key",
+        &server.uri(),
+    )?;
+    let mut candidate = Candidate::from_source(Source {
+        path: "target.py".into(),
+        text: "save()".into(),
+        focus: None,
+    })?;
+    let text = "x".repeat(MAX_FILE_BYTES);
+    candidate.supporting.push(SupportingSource {
+        file: "not-on-disk.py".into(),
+        range: Region::from_offsets(&text, 0..text.len())?,
+        text,
+    });
+    let error = evaluator
+        .assess("query", &candidate)
+        .await
+        .err()
+        .context("expected source limit")?;
+    assert!(error.to_string().contains("65536"));
+    candidate.supporting.clear();
+    candidate.text = "\t".repeat(MAX_FILE_BYTES);
+    candidate.range = Region::from_offsets(&candidate.text, 0..candidate.text.len())?;
+    let error = evaluator
+        .assess("query", &candidate)
+        .await
+        .err()
+        .context("expected encoded limit")?;
+    assert!(error.to_string().contains("98304"));
     server.verify().await;
     Ok(())
 }

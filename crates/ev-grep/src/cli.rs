@@ -31,6 +31,10 @@ pub(crate) struct Cli {
     #[arg(long, value_name = "FILE", conflicts_with = "glob")]
     pub candidates: Option<PathBuf>,
 
+    /// Supply a supporting file or PATH:N-M range for every candidate; repeat for more sources.
+    #[arg(long, value_name = "PATH[:N-M]")]
+    pub context: Vec<String>,
+
     /// Include or exclude paths using gitignore globs; prefix exclusions with '!'.
     #[arg(short = 'g', long, value_name = "GLOB")]
     pub glob: Vec<String>,
@@ -52,7 +56,7 @@ pub(crate) struct Cli {
     pub jobs: u16,
 
     /// Route answers below this confidence to uncertain (0 to 1).
-    #[arg(long, default_value_t = ev_grep_jev::MIN_CONFIDENCE, value_parser = confidence)]
+    #[arg(long, default_value_t = ev_grep_core::MIN_CONFIDENCE, value_parser = confidence)]
     pub min_confidence: f64,
 
     /// Result order: none streams immediately; score waits and sorts by match probability.

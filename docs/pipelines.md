@@ -41,7 +41,8 @@ ast-grep scan --json=stream src/ --inline-rules '{id: catches, language: python,
 ```
 
 The rule selects Python functions containing an `except` clause. Each candidate keeps its exact text and source range.
-Only candidate text is sent unless you explicitly supply `context`. Use `set -o pipefail` in a script to detect upstream
+Only candidate text is sent unless you supply original file `context`, `supporting` records, or `--context` paths.
+See [Search candidates](./cli.md#search-candidates) for the format. Use `set -o pipefail` in a script to detect upstream
 failures too. An empty candidate stream never falls back to searching the current directory.
 
 ## Narrow a review in two passes

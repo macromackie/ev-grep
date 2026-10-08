@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.5.0
+
+- Supply helper implementations with repeatable `--context PATH[:N-M]` or candidate JSON `supporting`. Supporting code
+  explains the selected candidate; it does not expand the search target. Complete inputs share the existing bounds.
+- Keep raw model assessments separate from confidence routing in JSON. Text uncertainty distinguishes a model's
+  uncertain choice from a decisive choice below the configured threshold. The default remains 0.8.
+- Record the query, executable version, and content-derived prompt identity for reproducible assessments.
+- Rust API: assess `Candidate` directly and use `Assessment::route` for caller policy. Provider methods return raw
+  answers consistently; `Jev::with_min_confidence` and stored routed assessment fields are removed.
+
 ## v0.4.4
 
 - Remove `--sarif`. Use text output for terminals and `--json` for integrations.
