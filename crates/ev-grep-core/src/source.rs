@@ -34,6 +34,30 @@ pub enum SourceRead {
     Binary,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct SourceTooLarge {
+    pub bytes: u64,
+}
+
+impl std::fmt::Display for SourceTooLarge {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "file is {} bytes; limit is {MAX_FILE_BYTES} bytes; source was not truncated",
+            self.bytes
+        )
+    }
+}
+
+impl std::error::Error for SourceTooLarge {}
+
+fn check_size(bytes: u64) -> Result<()> {
+    if bytes > MAX_FILE_BYTES as u64 {
+        return Err(SourceTooLarge { bytes }.into());
+    }
+    Ok(())
+}
+
 pub fn read_source(path: &Path) -> Result<SourceRead> {
     let metadata = path.symlink_metadata().context("cannot inspect file")?;
     ensure!(
@@ -49,16 +73,10 @@ pub fn read_source(path: &Path) -> Result<SourceRead> {
     if prefix.contains(&0) {
         return Ok(SourceRead::Binary);
     }
-    ensure!(
-        metadata.len() <= MAX_FILE_BYTES as u64,
-        "file exceeds 65536 bytes; source was not truncated"
-    );
+    check_size(metadata.len())?;
     file.take((MAX_FILE_BYTES + 1 - prefix.len()) as u64)
         .read_to_end(&mut prefix)?;
-    ensure!(
-        prefix.len() <= MAX_FILE_BYTES,
-        "file exceeds 65536 bytes; source was not truncated"
-    );
+    check_size(prefix.len() as u64)?;
     if prefix.contains(&0) {
         return Ok(SourceRead::Binary);
     }

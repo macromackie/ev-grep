@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.6.2
+
+- Expose oversized source files as a typed Rust error, including their byte count. Callers can distinguish a source
+  size limit from an unreadable file without parsing error text. File limits, scan outcomes, and exit codes are unchanged.
+
 ## v0.6.1
 
 - Reject JSON objects containing reserved parser keys instead of silently changing their values. This protects state

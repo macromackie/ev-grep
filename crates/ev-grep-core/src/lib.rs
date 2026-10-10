@@ -18,7 +18,8 @@ pub use json::parse_json;
 pub use region::{Position, Region};
 pub use scan::{Evaluator, ScanEvent, scan_inputs};
 pub use source::{
-    Focus, MAX_FILE_BYTES, MAX_QUERY_BYTES, Source, SourceRead, read_source, read_target, read_text,
+    Focus, MAX_FILE_BYTES, MAX_QUERY_BYTES, Source, SourceRead, SourceTooLarge, read_source,
+    read_target, read_text,
 };
 pub use target::{LineRange, Target, label};
 
