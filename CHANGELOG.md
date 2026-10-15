@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.3
+
+- Trust the operating system's certificate store as well as the bundled Mozilla roots. Requests through a
+  TLS-inspecting proxy no longer fail with `Jev transport failed: error sending request` when the proxy's certificate
+  authority is installed. `SSL_CERT_FILE` and `SSL_CERT_DIR` replace the system store when set.
+
 ## v0.6.2
 
 - Expose oversized source files as a typed Rust error, including their byte count. Callers can distinguish a source

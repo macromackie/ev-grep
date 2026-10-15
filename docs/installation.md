@@ -52,3 +52,5 @@ cargo build --release --locked
 ## Provider proxy
 
 `--endpoint URL` (or `EV_GREP_ENDPOINT`) sends requests and the selected provider credential to that URL. Use a trusted proxy that implements the provider protocol. Use HTTPS for remote services; HTTP is supported for local development. Redirects are disabled.
+
+HTTPS requests trust the bundled Mozilla roots and the operating system's certificate store. When `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, those certificates replace the operating system's store. Install a TLS-inspecting proxy's certificate authority in one of them.
