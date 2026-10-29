@@ -1,7 +1,9 @@
-use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use crate::{FileError, MAX_FILE_BYTES, Region, Source, SourceRead, Target, label, read_target};
+use crate::{
+    Error, FileError, MAX_FILE_BYTES, Region, SkipReason, Source, SourceRead, Target, label,
+    read_target,
+};
 
 /// Caller-selected text. A file is an identifier; it is never opened by candidate evaluation.
 #[derive(Debug, Deserialize, Serialize)]
@@ -28,22 +30,21 @@ pub struct SupportingSource {
 }
 
 impl SupportingSource {
-    pub fn validate(&self) -> Result<()> {
-        ensure!(
-            !self.file.is_empty() && !self.file.contains('\0'),
-            "invalid supporting file"
-        );
-        ensure!(
-            !self.text.contains('\0'),
-            "supporting source contains NUL bytes"
-        );
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.file.is_empty() || self.file.contains('\0') {
+            return Err(Error::InvalidSupportingFile);
+        }
+        if self.text.contains('\0') {
+            return Err(Error::SupportingNul);
+        }
         self.range.validate(&self.text, None)
     }
 
-    pub fn from_source(source: Source) -> Result<Self> {
+    pub fn from_source(source: Source) -> Result<Self, Error> {
+        let file = source.path.clone();
         let candidate = Candidate::from_source(source)?;
         Ok(Self {
-            file: candidate.file.context("missing supporting file")?,
+            file,
             range: candidate.range,
             text: candidate.text,
         })
@@ -51,32 +52,31 @@ impl SupportingSource {
 }
 
 impl Candidate {
-    pub fn validate(&self) -> Result<()> {
-        ensure!(
-            self.file
+    pub fn validate(&self) -> Result<(), Error> {
+        if self
+            .file
+            .as_ref()
+            .is_some_and(|file| file.is_empty() || file.contains('\0'))
+        {
+            return Err(Error::InvalidCandidateFile);
+        }
+        if self.bytes() > MAX_FILE_BYTES {
+            return Err(Error::CandidateTooLarge);
+        }
+        if self.text.contains('\0')
+            || self
+                .context
                 .as_ref()
-                .is_none_or(|file| !file.is_empty() && !file.contains('\0')),
-            "invalid candidate file"
-        );
-        ensure!(
-            self.bytes() <= MAX_FILE_BYTES,
-            "candidate source exceeds 65536 bytes; input was not truncated"
-        );
-        ensure!(
-            !self.text.contains('\0')
-                && self
-                    .context
-                    .as_ref()
-                    .is_none_or(|text| !text.contains('\0')),
-            "candidate contains NUL bytes"
-        );
+                .is_some_and(|text| text.contains('\0'))
+        {
+            return Err(Error::CandidateNul);
+        }
         self.range.validate(&self.text, self.context.as_deref())?;
         if let Some(metadata) = &self.meta_variables {
-            let bytes = serde_json::to_vec(metadata)?;
-            ensure!(
-                bytes.len() <= MAX_FILE_BYTES,
-                "candidate metadata exceeds 65536 bytes; input was not truncated"
-            );
+            let bytes = serde_json::to_vec(metadata).map_err(Error::EncodeMetadata)?;
+            if bytes.len() > MAX_FILE_BYTES {
+                return Err(Error::MetadataTooLarge);
+            }
             crate::parse_json(&bytes)?;
         }
         for source in &self.supporting {
@@ -92,7 +92,7 @@ impl Candidate {
         )
     }
 
-    pub fn from_source(source: Source) -> Result<Self> {
+    pub fn from_source(source: Source) -> Result<Self, Error> {
         let range = if let Some(focus) = &source.focus {
             let start: usize = source
                 .text
@@ -102,7 +102,7 @@ impl Candidate {
                         .lines
                         .start
                         .checked_sub(1)
-                        .context("invalid focus start")?,
+                        .ok_or(Error::InvalidFocus)?,
                 )
                 .map(str::len)
                 .sum();
@@ -142,7 +142,11 @@ pub enum Input {
 
 pub enum Loaded {
     Candidate(Candidate),
-    Binary(Target),
+    /// A file that is binary or over `MAX_FILE_BYTES`. A scan reports it as skipped and sends no request for it.
+    Skipped {
+        target: Target,
+        reason: SkipReason,
+    },
 }
 
 impl Input {
@@ -154,7 +158,7 @@ impl Input {
                 FileError::new(
                     candidate.file.as_deref().unwrap_or("<stdin>"),
                     Some(candidate.range.lines()),
-                    error,
+                    &error,
                 )
             })?;
             Ok(Loaded::Candidate(candidate))
@@ -168,7 +172,7 @@ impl Input {
             Self::Error(error) => Err(error),
             Self::Candidate(candidate) => {
                 candidate.validate().map_err(|error| {
-                    FileError::new(candidate.file.as_deref().unwrap_or("<stdin>"), None, error)
+                    FileError::new(candidate.file.as_deref().unwrap_or("<stdin>"), None, &error)
                 })?;
                 Ok(Loaded::Candidate(candidate))
             }
@@ -179,11 +183,18 @@ impl Input {
                 });
                 match loaded {
                     Ok(Some(candidate)) => Ok(Loaded::Candidate(candidate)),
-                    Ok(None) => Ok(Loaded::Binary(target)),
+                    Ok(None) => Ok(Loaded::Skipped {
+                        target,
+                        reason: SkipReason::Binary,
+                    }),
+                    Err(Error::SourceTooLarge { bytes }) => Ok(Loaded::Skipped {
+                        target,
+                        reason: SkipReason::TooLarge { bytes },
+                    }),
                     Err(error) => Err(FileError::new(
                         &target.path.display().to_string(),
                         target.lines,
-                        error,
+                        &error,
                     )),
                 }
             }

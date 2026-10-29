@@ -1,7 +1,8 @@
 use std::{fmt, str::FromStr};
 
-use anyhow::{Result, bail};
 use serde::Serialize;
+
+use crate::Error;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -19,11 +20,17 @@ impl Provider {
         }
     }
 
-    pub fn default_model(self) -> &'static str {
+    /// The models validated against the labeled evals for this provider, default first. Add a model only after an
+    /// eval run on it.
+    pub fn supported_models(self) -> &'static [&'static str] {
         match self {
-            Self::OpenRouter => "typesafe/jev-1.13-20260917",
-            Self::TypeSafe => "jev-1.13.0",
+            Self::OpenRouter => &["typesafe/jev-1.13-20260917"],
+            Self::TypeSafe => &["jev-1.13.0"],
         }
+    }
+
+    pub fn default_model(self) -> &'static str {
+        self.supported_models()[0]
     }
 
     pub fn key_variable(self) -> &'static str {
@@ -33,13 +40,14 @@ impl Provider {
         }
     }
 
-    pub fn model(self, requested: Option<&str>) -> Result<String> {
+    /// The requested model, or the default, when the supported-model table lists it.
+    pub fn model(self, requested: Option<&str>) -> Result<String, Error> {
         let model = requested.unwrap_or(self.default_model());
-        if model != self.default_model() {
-            bail!(
-                "unsupported model {model:?} for {self}; supported model: {}",
-                self.default_model()
-            );
+        if !self.supported_models().contains(&model) {
+            return Err(Error::UnsupportedModel {
+                provider: self,
+                model: model.to_owned(),
+            });
         }
         Ok(model.to_owned())
     }
@@ -55,12 +63,12 @@ impl fmt::Display for Provider {
 }
 
 impl FromStr for Provider {
-    type Err = String;
+    type Err = Error;
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "openrouter" => Ok(Self::OpenRouter),
             "typesafe" => Ok(Self::TypeSafe),
-            _ => Err("provider must be openrouter or typesafe".into()),
+            _ => Err(Error::UnknownProvider),
         }
     }
 }

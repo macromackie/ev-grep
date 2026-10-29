@@ -68,14 +68,39 @@ Other outcomes omit `reason`. These reasons describe routing; the classifier doe
 
 | Type | Data |
 | --- | --- |
-| `begin` | `query`, executable `version`, `prompt_id`, provider, requested model, confidence threshold, dry-run flag, jobs, sort order |
+| `begin` | `query`, executable `version`, `prompt_id`, provider, requested model, `model_validated` (false for an [unvalidated model](./providers.md#models)), confidence threshold, dry-run flag, `strict` flag, `max_candidates` (null when unset), jobs, sort order |
 | `selected` | Dry run: candidate fields, including optional `context`, `supporting`, and `metaVariables`, and combined source `bytes` |
 | `result` | Candidate fields, raw `assessment`, and `routing` |
 | `selected_state` | State dry run: `state`, content-derived `input_id`, and input `bytes` |
 | `assessment` | State answer: `state`, `input_id`, `bytes`, raw `assessment`, and `routing` |
-| `skipped` | File, optional requested lines, and binary reason |
-| `error` | File or input identifier, optional requested lines, and message |
-| `summary` | Selected, evaluated, match, no-match, uncertain, skipped, and error counts; dry-run flag |
+| `skipped` | File, optional requested lines, and `reason`: `binary`; `symlink` for a symbolic link that a directory search did not follow; or `too_large` for a file over 64 KiB, with its `bytes` |
+| `error` | File or input identifier, optional requested lines, `kind`, and message |
+| `summary` | Selected, evaluated, match, no-match, uncertain, skipped, and error counts; dry-run flag. `skipped` includes files over 64 KiB |
+
+An error's `kind` names the failure, so scripts can branch on it without parsing the message:
+
+| Kind | Failure |
+| --- | --- |
+| `configuration` | Invalid settings, such as conflicting arguments, an invalid glob, an unsupported model, or a missing API key |
+| `io` | An input could not be read, such as a missing file, or output could not be written |
+| `unsupported_file` | A symbolic link, a special file, or a directory given a line range |
+| `too_large` | An input over a [size limit](./limits.md), or a selection over `--max-candidates`; nothing was truncated |
+| `invalid_input` | Malformed input, such as invalid UTF-8, an empty query, a line range outside its file, or invalid JSON |
+| `timeout` | An attempt or the 15-second request budget timed out, or the provider answered HTTP 408 |
+| `connect` | No connection to the provider was made |
+| `tls` | The TLS handshake failed |
+| `transport` | The connection failed while the request was sent or the response was read |
+| `rate_limited` | The provider answered HTTP 429, or its rate limit outlasts the assessment's 15-second budget |
+| `unavailable` | The provider or its gateway answered HTTP 500, 502, 503, 504, 520, 522, or 524 |
+| `moderation` | The provider answered HTTP 403 and named moderation reasons |
+| `credential_rejected` | The provider answered HTTP 401, 402, or a 403 without moderation reasons: it rejected the key, or the key reached a limit |
+| `rejected` | The provider answered another HTTP error, such as 400 or 404 |
+| `invalid_response` | The response failed validation, such as probabilities that do not sum to one |
+| `model_mismatch` | The response names a different model than the one requested |
+| `response_too_large` | The response exceeds 64 KiB |
+
+A `credential_rejected` error stops the search, because every later request would fail the same way. Its record has no
+file. No request starts after it, and requests already in flight are cancelled. Results that arrived earlier remain.
 
 Results arrive as requests finish, or in descending match probability with `--sort score`. All successful assessments appear, including nonmatches. Completed runs end with
 one summary. Interrupted runs may not. Argument parsing errors print usage and exit 2 before starting the stream.
@@ -125,10 +150,40 @@ The first matching row wins:
 
 | Code | Meaning |
 | --- | --- |
-| `2` | An execution or argument error; earlier results may still be available |
+| `2` | An execution or argument error, or with `--strict` a file skipped as over 64 KiB; earlier results may still be available |
 | `3` | At least one answer routes to uncertain |
 | `0` | At least one match, with no errors or uncertainty |
 | `1` | No matches, with no errors or uncertainty; includes empty selections |
 
+Skipped files, including files over 64 KiB, do not change the exit code unless `--strict` is set.
 Dry runs return 0 for eligible text or a valid state value, 1 for an empty candidate selection, and 2 for errors.
 They need no key and make no requests.
+
+## Traces
+
+```sh
+ev-grep 'Hides a database failure' src/ --json --trace trace.jsonl
+```
+
+Each line of a `--trace` file is one JSON object with `timestamp`, `level`, `target`, and `fields`. The first
+record's `fields.event` is `trace.started`. It names `trace_schema_version`, currently 1, the binary's `version`, the
+Git `revision` it was built from (`unknown` outside a Git checkout), and the `environment`. The environment is the
+`--trace-environment` value, or `ci` when the `CI` variable is set and `local` otherwise.
+
+A span writes one record when it closes: `fields.message` is `close`, `fields.time.busy` and `fields.time.idle` give
+its durations, and `span` holds its name and fields. Every other record lists its enclosing spans in `spans`, outermost
+first. Traces are not sampled, and they keep only ev-grep's own records.
+
+| Span | Fields |
+| --- | --- |
+| `ev_grep.search` | `exit_code` |
+| `ev_grep.file` | `path` as output names it; `bytes` of the candidate with its supporting sources, or of a file over 64 KiB; `outcome`, the record it produced (`result`, `skipped`, or `error`); skip `reason`; error `kind` |
+| `provider.request` | `provider`, `model`, and `body_bytes`, the encoded request size |
+| `provider.wait` | `reason`: `permit` for a concurrency slot, `cooldown` for a shared rate limit, or `backoff` before a retry |
+| `provider.attempt` | `attempt`, counted from 1, and `hedge` |
+
+Each attempt that receives an answer or fails writes a `provider.attempt_finished` event with `elapsed_ms`. An
+attempt cancelled in flight, such as the slower of a hedged pair, writes none, but its span still closes. Each request
+ends with a `provider.request_finished` event with its `attempts`, `hedges`, and `elapsed_ms`. A failure adds its
+`kind`, HTTP `status`, and `retry_after_ms`; a failed attempt also adds the provider's `request_id` and `cf_ray`.
+Error kinds in traces use the Rust names, such as `RateLimited` for `rate_limited`.

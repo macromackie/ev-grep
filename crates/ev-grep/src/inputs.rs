@@ -4,7 +4,6 @@ use std::{
     pin::Pin,
 };
 
-use anyhow::{Context, Result, ensure};
 use ev_grep_core::{
     Candidate, FileError, Input, MAX_FILE_BYTES, Region, SourceRead, SupportingSource, Target,
     discover, parse_json, read_source, read_target, read_text,
@@ -15,7 +14,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 
-use crate::cli::Cli;
+use crate::{cli::Cli, error::Error};
 
 const MAX_RECORD_BYTES: usize = 512 * 1024;
 type Inputs = Pin<Box<dyn Stream<Item = Input>>>;
@@ -27,19 +26,24 @@ pub(crate) struct StateInput {
     pub bytes: usize,
 }
 
-pub(crate) fn state(path: &Path) -> Result<StateInput> {
+pub(crate) fn state(path: &Path) -> Result<StateInput, Error> {
     let text = if path.as_os_str() == "-" {
         read_text(io::stdin().lock(), MAX_FILE_BYTES)?
     } else {
-        let SourceRead::Text(source) =
-            read_source(path).with_context(|| format!("cannot read state {}", path.display()))?
+        let SourceRead::Text(source) = read_source(path).map_err(|source| Error::State {
+            path: path.to_path_buf(),
+            source,
+        })?
         else {
-            anyhow::bail!("state input is binary");
+            return Err(Error::BinaryState);
         };
         source.text
     };
-    let state = parse_json(text.as_bytes()).context("expected one JSON state value")?;
-    let input_id = format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(&state)?));
+    let state = parse_json(text.as_bytes()).map_err(Error::StateJson)?;
+    let input_id = format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&state).map_err(Error::EncodeState)?)
+    );
     Ok(StateInput {
         state,
         input_id,
@@ -47,18 +51,22 @@ pub(crate) fn state(path: &Path) -> Result<StateInput> {
     })
 }
 
-pub(crate) async fn select(cli: &Cli, arguments: &[String]) -> Result<(Inputs, Vec<FileError>)> {
+/// Select the run's inputs, with the discovery errors and skipped symbolic links to report before them.
+pub(crate) async fn select(
+    cli: &Cli,
+    arguments: &[String],
+) -> Result<(Inputs, Vec<FileError>, Vec<String>), Error> {
     if cli.stdin {
         let mut bytes = Vec::new();
         tokio::io::stdin()
             .take((MAX_FILE_BYTES + 1) as u64)
             .read_to_end(&mut bytes)
-            .await?;
-        ensure!(
-            bytes.len() <= MAX_FILE_BYTES,
-            "stdin exceeds 65536 bytes; input was not truncated"
-        );
-        let text = String::from_utf8(bytes).context("stdin is not valid UTF-8")?;
+            .await
+            .map_err(Error::Stdin)?;
+        if bytes.len() > MAX_FILE_BYTES {
+            return Err(Error::StdinTooLarge);
+        }
+        let text = String::from_utf8(bytes).map_err(Error::StdinNotUtf8)?;
         let candidate = Candidate {
             file: None,
             range: Region::from_offsets(&text, 0..text.len())?,
@@ -71,18 +79,21 @@ pub(crate) async fn select(cli: &Cli, arguments: &[String]) -> Result<(Inputs, V
         return Ok((
             Box::pin(stream::iter([Input::Candidate(candidate)])),
             vec![],
+            vec![],
         ));
     }
     if let Some(path) = &cli.candidates {
-        let reader: Box<dyn AsyncRead + Unpin> = if path.as_os_str() == "-" {
-            Box::new(tokio::io::stdin())
-        } else {
-            Box::new(
-                tokio::fs::File::open(path)
-                    .await
-                    .with_context(|| format!("cannot read candidates {}", path.display()))?,
-            )
-        };
+        let reader: Box<dyn AsyncRead + Unpin> =
+            if path.as_os_str() == "-" {
+                Box::new(tokio::io::stdin())
+            } else {
+                Box::new(tokio::fs::File::open(path).await.map_err(|source| {
+                    Error::CandidatesFile {
+                        path: path.clone(),
+                        source,
+                    }
+                })?)
+            };
         let input = CandidateLines {
             reader: BufReader::new(reader),
             path: path.clone(),
@@ -94,12 +105,24 @@ pub(crate) async fn select(cli: &Cli, arguments: &[String]) -> Result<(Inputs, V
                 input.next().await.map(|item| (item, input))
             })),
             vec![],
+            vec![],
         ));
     }
     let found = discover(arguments, &cli.glob)?;
+    // The search writes its trace while it runs, so it never selects that file, as ripgrep never searches its output.
+    let trace = cli
+        .trace
+        .as_deref()
+        .filter(|path| path.as_os_str() != "-")
+        .and_then(|path| path.canonicalize().ok());
+    let targets = found
+        .targets
+        .into_iter()
+        .filter(move |target| trace.is_none() || target.path.canonicalize().ok() != trace);
     Ok((
-        Box::pin(stream::iter(found.targets.into_iter().map(Input::File))),
+        Box::pin(stream::iter(targets.map(Input::File))),
         found.errors,
+        found.symlinks,
     ))
 }
 
@@ -126,24 +149,18 @@ impl<R: tokio::io::AsyncBufRead + Unpin> CandidateLines<R> {
                 }
                 Ok(_) if bytes.len() > MAX_RECORD_BYTES => {
                     self.done = true;
-                    Err(anyhow::anyhow!(
-                        "candidate JSON line exceeds 524288 bytes; remaining input was not read"
-                    ))
+                    Err(Error::CandidateLineTooLarge)
                 }
                 Ok(_) if bytes.iter().all(u8::is_ascii_whitespace) => continue,
-                Ok(_) => parse_json(&bytes)
-                    .and_then(|value| {
-                        serde_json::from_value::<Candidate>(value).map_err(|_| {
-                            anyhow::anyhow!("expected candidate JSON with file, range, and text")
-                        })
-                    })
-                    .and_then(|candidate| {
-                        candidate.validate()?;
-                        Ok(candidate)
-                    }),
+                Ok(_) => parse_json(&bytes).map_err(Error::Core).and_then(|value| {
+                    let candidate = serde_json::from_value::<Candidate>(value)
+                        .map_err(|_| Error::CandidateFields)?;
+                    candidate.validate()?;
+                    Ok(candidate)
+                }),
                 Err(error) => {
                     self.done = true;
-                    Err(anyhow::Error::from(error).context("cannot read candidates"))
+                    Err(Error::ReadCandidates(error))
                 }
             };
             return Some(match parsed {
@@ -151,7 +168,7 @@ impl<R: tokio::io::AsyncBufRead + Unpin> CandidateLines<R> {
                 Err(error) => Input::Error(FileError::new(
                     &format!("{}:{}", self.path.display(), self.line),
                     None,
-                    error,
+                    &error,
                 )),
             });
         }
@@ -159,22 +176,26 @@ impl<R: tokio::io::AsyncBufRead + Unpin> CandidateLines<R> {
     }
 }
 
-pub(crate) fn supporting(arguments: &[String]) -> Result<Vec<SupportingSource>> {
+pub(crate) fn supporting(arguments: &[String]) -> Result<Vec<SupportingSource>, Error> {
     let mut sources = Vec::new();
     let mut bytes = 0usize;
     for argument in arguments {
         let target = Target::parse(argument)?;
-        let SourceRead::Text(source) = read_target(&target)
-            .with_context(|| format!("cannot read supporting source {argument}"))?
+        let SourceRead::Text(source) =
+            read_target(&target).map_err(|source| Error::Supporting {
+                argument: argument.clone(),
+                source,
+            })?
         else {
-            anyhow::bail!("supporting source {argument} is binary");
+            return Err(Error::BinarySupporting {
+                argument: argument.clone(),
+            });
         };
         let source = SupportingSource::from_source(source)?;
         bytes = bytes.saturating_add(source.text.len());
-        ensure!(
-            bytes <= MAX_FILE_BYTES,
-            "supporting sources exceed 65536 bytes; input was not truncated"
-        );
+        if bytes > MAX_FILE_BYTES {
+            return Err(Error::SupportingTooLarge);
+        }
         sources.push(source);
     }
     Ok(sources)

@@ -1,0 +1,12 @@
+# An entered span stays current on the thread while its future is suspended, so an await while one is held attributes
+# other tasks' work to it. Async code attaches spans with `Instrument::instrument` instead.
+await-holding-invalid-types = [
+    { path = "tracing::span::Entered", reason = "an entered span would stay current across the await; use `Instrument::instrument`" },
+    { path = "tracing::span::EnteredSpan", reason = "an entered span would stay current across the await; use `Instrument::instrument`" },
+]
+# cli-output-channels opens a handle to either standard stream only in the output module. Clippy has no path scope, so
+# the ev-grep output module's one call of each function carries an outer `#[expect(clippy::disallowed_methods)]`.
+disallowed-methods = [
+    { path = "std::io::stderr", reason = "Open standard error only in the output module, as cli-output-channels requires." },
+    { path = "std::io::stdout", reason = "Open standard output only in the output module, as cli-output-channels requires." },
+]

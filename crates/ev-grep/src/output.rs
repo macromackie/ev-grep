@@ -1,11 +1,68 @@
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    process::ExitCode,
+};
 
 use crate::inputs::StateInput;
-use anyhow::Result;
 use clap::ValueEnum;
-use ev_grep_core::{Assessment, Candidate, LineRange, Outcome, ScanEvent, Uncertainty, label};
+use ev_grep_core::{
+    Assessment, Candidate, ErrorKind, LineRange, MAX_FILE_BYTES, Outcome, ScanEvent, SkipReason,
+    Uncertainty, label,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
+
+/// The version of the JSON Lines record shapes, which every record names.
+const SCHEMA_VERSION: u32 = 2;
+
+/// How a run ends, as the process exit status reports it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExitStatus {
+    /// An input, provider, or output error happened, or `--strict` saw a file over the file limit.
+    Error,
+    /// A candidate matched, or a dry run selected a file it would assess.
+    Match,
+    /// No candidate matched and none was uncertain.
+    NoMatch,
+    /// No error happened and a candidate was uncertain.
+    Uncertain,
+}
+
+impl ExitStatus {
+    /// The process exit code, which the trace's search span also records.
+    pub(crate) const fn code(self) -> u8 {
+        match self {
+            Self::Match => 0,
+            Self::NoMatch => 1,
+            Self::Error => 2,
+            Self::Uncertain => 3,
+        }
+    }
+}
+
+impl From<ExitStatus> for ExitCode {
+    fn from(status: ExitStatus) -> Self {
+        Self::from(status.code())
+    }
+}
+
+/// Standard output, which receives only the search's results.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the output module opens standard output, as cli-output-channels requires"
+)]
+pub(crate) fn stdout() -> io::StdoutLock<'static> {
+    io::stdout().lock()
+}
+
+/// Standard error, which receives errors, skip notices, the summary, and a trace written to `-`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the output module opens standard error, as cli-output-channels requires"
+)]
+pub(crate) fn stderr() -> io::Stderr {
+    io::stderr()
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Format {
@@ -30,18 +87,24 @@ pub(crate) struct Summary {
     pub skipped: usize,
     pub errors: usize,
     pub dry_run: bool,
+    /// Files skipped for exceeding the file limit, also counted in `skipped`.
+    #[serde(skip)]
+    pub too_large: usize,
+    /// Whether a file skipped for exceeding the file limit fails the run, as `--strict` asks.
+    #[serde(skip)]
+    pub strict: bool,
 }
 
 impl Summary {
-    pub(crate) fn exit_code(&self) -> u8 {
-        if self.errors > 0 {
-            2
+    pub(crate) fn exit_status(&self) -> ExitStatus {
+        if self.errors > 0 || (self.strict && self.too_large > 0) {
+            ExitStatus::Error
         } else if self.uncertain > 0 {
-            3
+            ExitStatus::Uncertain
         } else if self.matches > 0 || (self.dry_run && self.selected > self.skipped) {
-            0
+            ExitStatus::Match
         } else {
-            1
+            ExitStatus::NoMatch
         }
     }
 }
@@ -60,6 +123,7 @@ impl<W: Write> Output<W> {
         writer: W,
         format: Format,
         dry_run: bool,
+        strict: bool,
         sort: Sort,
         min_confidence: f64,
     ) -> Self {
@@ -71,20 +135,21 @@ impl<W: Write> Output<W> {
             pending: Vec::new(),
             summary: Summary {
                 dry_run,
+                strict,
                 ..Summary::default()
             },
         }
     }
 
-    pub(crate) fn begin(&mut self, data: Value) -> Result<()> {
+    pub(crate) fn begin(&mut self, data: Value) -> io::Result<()> {
         self.event("begin", data)
     }
 
-    fn event(&mut self, kind: &str, data: impl Serialize) -> Result<()> {
+    fn event(&mut self, kind: &str, data: impl Serialize) -> io::Result<()> {
         if self.format == Format::Json {
             serde_json::to_writer(
                 &mut self.writer,
-                &json!({"schema_version": 2, "type": kind, "data": data}),
+                &json!({"schema_version": SCHEMA_VERSION, "type": kind, "data": data}),
             )?;
             writeln!(self.writer)?;
             self.writer.flush()?;
@@ -96,17 +161,21 @@ impl<W: Write> Output<W> {
         &mut self,
         path: Option<&str>,
         lines: Option<LineRange>,
+        kind: ErrorKind,
         message: &str,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         self.summary.errors += 1;
         if self.format == Format::Json {
             self.event(
                 "error",
-                located(json!({ "file": path, "message": message }), lines),
+                located(
+                    json!({ "file": path, "kind": kind, "message": message }),
+                    lines,
+                ),
             )?;
         } else {
             writeln!(
-                io::stderr().lock(),
+                stderr().lock(),
                 "ev-grep: {}{message}",
                 path.map(|p| format!("{}: ", label(p, lines)))
                     .unwrap_or_default()
@@ -116,7 +185,7 @@ impl<W: Write> Output<W> {
     }
 
     /// Report a candidate selected by a dry run.
-    pub(crate) fn selected(&mut self, candidate: &Candidate) -> Result<()> {
+    pub(crate) fn selected(&mut self, candidate: &Candidate) -> io::Result<()> {
         self.summary.selected += 1;
         let bytes = candidate.bytes();
         match self.format {
@@ -130,7 +199,7 @@ impl<W: Write> Output<W> {
         Ok(())
     }
 
-    pub(crate) fn select_state(&mut self, input: &StateInput) -> Result<()> {
+    pub(crate) fn select_state(&mut self, input: &StateInput) -> io::Result<()> {
         self.summary.selected += 1;
         if !self.summary.dry_run {
             return Ok(());
@@ -155,7 +224,7 @@ impl<W: Write> Output<W> {
         &mut self,
         input: &StateInput,
         assessment: &Assessment,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         self.count_assessment(assessment);
         let routing = assessment.route(self.min_confidence);
         match self.format {
@@ -181,8 +250,8 @@ impl<W: Write> Output<W> {
         Ok(())
     }
 
-    /// Report the outcome of one selected input: a result, a skipped binary file, or an input error.
-    pub(crate) fn scan_event(&mut self, event: ScanEvent) -> Result<()> {
+    /// Report the outcome of one selected input: a result, a skipped file, or an input error.
+    pub(crate) fn scan_event(&mut self, event: ScanEvent) -> io::Result<()> {
         self.summary.selected += 1;
         match event {
             ScanEvent::Result {
@@ -199,19 +268,34 @@ impl<W: Write> Output<W> {
                     self.result(&candidate, &assessment)?;
                 }
             }
-            ScanEvent::Skipped { path, lines } => {
+            ScanEvent::Skipped {
+                path,
+                lines,
+                reason,
+            } => {
                 self.summary.skipped += 1;
-                let data = json!({"file": path, "reason": "binary"});
+                if let SkipReason::TooLarge { bytes } = reason {
+                    self.summary.too_large += 1;
+                    if self.format == Format::Text {
+                        writeln!(
+                            stderr().lock(),
+                            "ev-grep: {}: skipped; file is {bytes} bytes; limit is {MAX_FILE_BYTES} bytes",
+                            label(&path, lines)
+                        )?;
+                    }
+                }
+                let mut data = serde_json::to_value(reason)?;
+                data["file"] = json!(path);
                 self.event("skipped", located(data, lines))?;
             }
             ScanEvent::Error(error) => {
-                self.error(Some(&error.path), error.lines, &error.message)?
+                self.error(Some(&error.path), error.lines, error.kind, &error.message)?
             }
         }
         Ok(())
     }
 
-    fn result(&mut self, candidate: &Candidate, assessment: &Assessment) -> Result<()> {
+    fn result(&mut self, candidate: &Candidate, assessment: &Assessment) -> io::Result<()> {
         let routing = assessment.route(self.min_confidence);
         match self.format {
             Format::Json => {
@@ -243,7 +327,7 @@ impl<W: Write> Output<W> {
         Ok(())
     }
 
-    pub(crate) fn finish(&mut self) -> Result<u8> {
+    pub(crate) fn finish(&mut self) -> io::Result<ExitStatus> {
         self.pending.sort_by(|(a, a_score), (b, b_score)| {
             match_probability(b_score)
                 .total_cmp(&match_probability(a_score))
@@ -252,12 +336,12 @@ impl<W: Write> Output<W> {
         for (candidate, assessment) in std::mem::take(&mut self.pending) {
             self.result(&candidate, &assessment)?;
         }
-        let code = self.summary.exit_code();
+        let status = self.summary.exit_status();
         if self.format == Format::Json {
             self.event("summary", serde_json::to_value(&self.summary)?)?;
         } else {
             writeln!(
-                io::stderr().lock(),
+                stderr().lock(),
                 "{} selected · {} evaluated · {} match · {} no match · {} uncertain · {} skipped · {} errors{}",
                 self.summary.selected,
                 self.summary.evaluated,
@@ -273,7 +357,7 @@ impl<W: Write> Output<W> {
                 }
             )?;
         }
-        Ok(code)
+        Ok(status)
     }
 }
 

@@ -1,8 +1,9 @@
-use anyhow::{Context, Result, ensure};
 use ev_grep_core::Candidate;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+
+use crate::Error;
 
 /// Prompt experiments edit this file and rebuild, so candidates run through the shipped request path.
 const PROMPT: &str = include_str!("../prompt.json");
@@ -26,26 +27,26 @@ pub(crate) struct Criteria {
     pub(crate) uncertain: String,
 }
 
-pub(crate) fn prompt() -> Result<Prompt> {
+pub(crate) fn prompt() -> Result<Prompt, Error> {
     parse_prompt(PROMPT)
 }
 
-pub(crate) fn parse_prompt(text: &str) -> Result<Prompt> {
-    let prompt: Prompt = serde_json::from_str(text).context("invalid prompt.json")?;
+pub(crate) fn parse_prompt(text: &str) -> Result<Prompt, Error> {
+    let prompt: Prompt = serde_json::from_str(text).map_err(Error::Prompt)?;
     let criteria = &prompt.criteria;
-    ensure!(
-        [
-            &prompt.task,
-            &prompt.focus,
-            &prompt.supporting,
-            &criteria.matches,
-            &criteria.no_match,
-            &criteria.uncertain
-        ]
-        .iter()
-        .all(|text| !text.trim().is_empty()),
-        "prompt.json fields must not be empty"
-    );
+    if [
+        &prompt.task,
+        &prompt.focus,
+        &prompt.supporting,
+        &criteria.matches,
+        &criteria.no_match,
+        &criteria.uncertain,
+    ]
+    .iter()
+    .any(|text| text.trim().is_empty())
+    {
+        return Err(Error::EmptyPrompt);
+    }
     Ok(prompt)
 }
 

@@ -4,12 +4,13 @@ use ev_grep_core::{
     SupportingSource, Uncertainty,
 };
 use serde_json::{Value, json};
+use std::time::Duration;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
 
-use crate::{Jev, Provider, protocol};
+use crate::{Error, FailureKind, Jev, Provider, RequestError, protocol};
 
 fn response(model: &str) -> Value {
     json!({"model": model, "answers": {"match": {
@@ -95,7 +96,12 @@ async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> 
         )
         .mount(&server)
         .await;
-    let redirect = Jev::connect(&format!("{}/redirect", server.uri()), model, "test-key")?;
+    let redirect = Jev::connect(
+        Provider::TypeSafe,
+        &format!("{}/redirect", server.uri()),
+        model,
+        "test-key",
+    )?;
     assert!(redirect.assess("query", &source).await.is_err());
     Ok(())
 }
@@ -291,7 +297,12 @@ async fn transient_failures_recover_but_retries_are_bounded() -> Result<()> {
         text: "return cached;".into(),
         focus: None,
     })?;
-    let recovering = Jev::connect(&format!("{}/recover", server.uri()), model, "test-key")?;
+    let recovering = Jev::connect(
+        Provider::OpenRouter,
+        &format!("{}/recover", server.uri()),
+        model,
+        "test-key",
+    )?;
     assert_eq!(
         recovering
             .assess("Returns cached values", &source)
@@ -310,7 +321,12 @@ async fn transient_failures_recover_but_retries_are_bounded() -> Result<()> {
         .expect(3)
         .mount(&server)
         .await;
-    let down = Jev::connect(&format!("{}/down", server.uri()), model, "test-key")?;
+    let down = Jev::connect(
+        Provider::OpenRouter,
+        &format!("{}/down", server.uri()),
+        model,
+        "test-key",
+    )?;
     let error = down
         .assess("Returns cached values", &source)
         .await
@@ -325,9 +341,218 @@ async fn transient_failures_recover_but_retries_are_bounded() -> Result<()> {
         .expect(1)
         .mount(&server)
         .await;
-    let unauthorized = Jev::connect(&format!("{}/unauthorized", server.uri()), model, "test-key")?;
-    assert!(unauthorized.assess("query", &source).await.is_err());
+    // A rejected credential is sent once, and no later request that shares it starts.
+    let unauthorized = Jev::connect(
+        Provider::OpenRouter,
+        &format!("{}/unauthorized", server.uri()),
+        model,
+        "test-key",
+    )?;
+    for _ in 0..2 {
+        let error = unauthorized
+            .assess("query", &source)
+            .await
+            .err()
+            .context("expected a rejected credential")?;
+        assert!(
+            matches!(
+                &error,
+                Error::Request(RequestError {
+                    kind: FailureKind::CredentialRejected,
+                    ..
+                })
+            ),
+            "{error}"
+        );
+    }
+
+    // Every attempt would reach the same renamed model, so a mismatch is sent once.
+    let renamed = "typesafe/jev-1.14-20261101";
+    Mock::given(path("/renamed"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response(renamed)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = Jev::connect(
+        Provider::OpenRouter,
+        &format!("{}/renamed", server.uri()),
+        model,
+        "test-key",
+    )?
+    .assess("query", &source)
+    .await
+    .err()
+    .context("expected a model mismatch")?;
+    let Error::Request(failure) = &error else {
+        anyhow::bail!("expected a request error: {error}");
+    };
+    assert_eq!(failure.kind, FailureKind::ModelMismatch);
+    assert!(!failure.kind.retryable());
+    let message = error.to_string();
+    assert!(
+        message.contains(renamed) && message.contains(model),
+        "{message}"
+    );
+
+    // A moderation 403 keeps its reason codes, never the flagged input or message.
+    Mock::given(path("/moderated"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({"error": {
+            "code": 403, "message": "private provider message",
+            "metadata": {"reasons": ["violence", "private reason text"], "flagged_input": "private source"}
+        }})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = Jev::connect(
+        Provider::OpenRouter,
+        &format!("{}/moderated", server.uri()),
+        model,
+        "test-key",
+    )?
+    .assess("query", &source)
+    .await
+    .err()
+    .context("expected a moderation error")?;
+    let Error::Request(failure) = &error else {
+        anyhow::bail!("expected a request error: {error}");
+    };
+    assert_eq!(failure.kind, FailureKind::Moderation);
+    assert_eq!(failure.moderation, Some(vec!["violence".to_owned()]));
+    assert!(!format!("{error:?}").contains("private"));
     server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn transport_failures_name_their_cause() -> Result<()> {
+    let model = Provider::TypeSafe.default_model();
+    let source = Candidate::from_source(Source {
+        path: "cache.ts".into(),
+        text: "return cached;".into(),
+        focus: None,
+    })?;
+    let unused = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    let error = Jev::connect(
+        Provider::TypeSafe,
+        &format!("http://{unused}/jev"),
+        model,
+        "test-key",
+    )?
+    .assess("query", &source)
+    .await
+    .err()
+    .context("expected a refused connection")?;
+    assert!(
+        matches!(
+            &error,
+            Error::Request(RequestError {
+                kind: FailureKind::Connect,
+                ..
+            })
+        ),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .starts_with("Jev transport failed (connect): "),
+        "{error}"
+    );
+
+    // A plain HTTP server answers the TLS handshake with bytes that are not TLS.
+    let server = MockServer::start().await;
+    let error = Jev::connect(
+        Provider::TypeSafe,
+        &server.uri().replace("http://", "https://"),
+        model,
+        "test-key",
+    )?
+    .assess("query", &source)
+    .await
+    .err()
+    .context("expected a TLS failure")?;
+    assert!(
+        matches!(
+            &error,
+            Error::Request(RequestError {
+                kind: FailureKind::Tls,
+                ..
+            })
+        ),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .starts_with("Jev transport failed (tls): "),
+        "{error}"
+    );
+    Ok(())
+}
+
+/// Paused time reaches every attempt timeout before the provider's delayed answer, which arrives in real time.
+#[tokio::test(start_paused = true)]
+async fn timeouts_are_typed_for_attempts_and_the_request_budget() -> Result<()> {
+    let model = Provider::TypeSafe.default_model();
+    let source = Candidate::from_source(Source {
+        path: "cache.ts".into(),
+        text: "return cached;".into(),
+        focus: None,
+    })?;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(response(model))
+                .set_delay(Duration::from_secs(30)),
+        )
+        .mount(&server)
+        .await;
+    // With a hedge, the third attempt starts at 6 seconds and times out within the budget.
+    let error = Jev::connect(Provider::TypeSafe, &server.uri(), model, "test-key")?
+        .assess("query", &source)
+        .await
+        .err()
+        .context("expected an attempt timeout")?;
+    assert!(
+        matches!(
+            &error,
+            Error::Request(RequestError {
+                kind: FailureKind::Timeout,
+                ..
+            })
+        ),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .starts_with("Jev transport failed (timeout): "),
+        "{error}"
+    );
+    // One slot runs the three attempts in sequence, so the 15-second budget ends the third.
+    let error = Jev::connect(Provider::TypeSafe, &server.uri(), model, "test-key")?
+        .with_jobs(1)?
+        .assess("query", &source)
+        .await
+        .err()
+        .context("expected the budget to expire")?;
+    assert!(
+        matches!(
+            &error,
+            Error::Request(RequestError {
+                kind: FailureKind::Timeout,
+                ..
+            })
+        ),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("timed out after its 15-second budget"),
+        "{error}"
+    );
     Ok(())
 }
 

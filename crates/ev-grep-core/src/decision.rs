@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+use crate::Error;
 
 pub struct Question<'a> {
     pub id: &'a str,
@@ -27,11 +28,16 @@ pub struct DecisionBatch {
 }
 
 impl DecisionBatch {
-    pub fn into_single(mut self) -> Result<Assessment> {
-        anyhow::ensure!(self.answers.len() == 1, "expected one assessment");
-        let (_, mut answer) = self.answers.pop_first().context("missing assessment")?;
-        answer.request = Some(self.request);
-        Ok(answer)
+    pub fn into_single(self) -> Result<Assessment, Error> {
+        let count = self.answers.len();
+        let mut answers = self.answers.into_values();
+        match (answers.next(), answers.next()) {
+            (Some(mut answer), None) => {
+                answer.request = Some(self.request);
+                Ok(answer)
+            }
+            _ => Err(Error::AnswerCount { count }),
+        }
     }
 }
 

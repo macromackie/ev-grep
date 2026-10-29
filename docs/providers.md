@@ -16,7 +16,7 @@ ev-grep --provider typesafe 'Performs database operations' src/
 
 ## Models
 
-| Provider | Credential | Default and supported model |
+| Provider | Credential | Supported models, default first |
 | --- | --- | --- |
 | `openrouter` | `OPENROUTER_API_KEY` | `typesafe/jev-1.13-20260917` |
 | `typesafe` | `TYPESAFE_API_KEY` | `jev-1.13.0` |
@@ -27,6 +27,16 @@ ev-grep --provider openrouter --model typesafe/jev-1.13-20260917 \
 ```
 
 Set `EV_GREP_PROVIDER` and `EV_GREP_MODEL` for shell defaults. Flags override those variables. API keys do not select a provider implicitly. Unsupported models fail before requests.
+
+The table lists the models that ev-grep's model evaluations have checked. To send a model outside it, such as a newer
+Jev release, add `--unvalidated-model`:
+
+```sh
+ev-grep --provider typesafe --model jev-1.14.0 --unvalidated-model \
+  'Performs database operations' src/
+```
+
+The `begin` record then sets `model_validated` to `false`. Responses must still name the requested model.
 
 ## Requests
 

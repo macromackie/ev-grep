@@ -1,9 +1,10 @@
-use anyhow::{Result, ensure};
 use serde::{
     Deserializer,
-    de::{Error, MapAccess, Visitor},
+    de::{Error as _, MapAccess, Visitor},
 };
 use serde_json::{Value, value::RawValue};
+
+use crate::Error;
 
 struct ObjectValues;
 
@@ -30,23 +31,26 @@ impl<'de> Visitor<'de> for ObjectValues {
 
 /// Parse JSON without confusing object keys with serde's internal value representations.
 /// Callers bound input bytes; nesting is limited to 128 levels here.
-pub fn parse_json(bytes: &[u8]) -> Result<Value> {
-    let raw: &RawValue = serde_json::from_slice(bytes)?;
+pub fn parse_json(bytes: &[u8]) -> Result<Value, Error> {
+    let raw: &RawValue = serde_json::from_slice(bytes).map_err(Error::Json)?;
     let mut pending = vec![(raw, 0)];
     while let Some((raw, depth)) = pending.pop() {
-        ensure!(depth < 128, "JSON nesting exceeds 128 levels");
+        if depth >= 128 {
+            return Err(Error::JsonDepth);
+        }
         match raw.get().as_bytes().first() {
             Some(b'{') => {
-                let values =
-                    serde_json::Deserializer::from_str(raw.get()).deserialize_map(ObjectValues)?;
+                let values = serde_json::Deserializer::from_str(raw.get())
+                    .deserialize_map(ObjectValues)
+                    .map_err(Error::Json)?;
                 pending.extend(values.into_iter().map(|value| (value, depth + 1)));
             }
             Some(b'[') => {
-                let array: Vec<&RawValue> = serde_json::from_str(raw.get())?;
+                let array: Vec<&RawValue> = serde_json::from_str(raw.get()).map_err(Error::Json)?;
                 pending.extend(array.into_iter().map(|value| (value, depth + 1)));
             }
             _ => {}
         }
     }
-    Ok(serde_json::from_slice(bytes)?)
+    serde_json::from_slice(bytes).map_err(Error::Json)
 }

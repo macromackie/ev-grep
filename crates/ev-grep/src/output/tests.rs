@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 
-use ev_grep_core::{Assessment, Candidate, LineRange, Outcome, Position, Region, ScanEvent};
+use ev_grep_core::{
+    Assessment, Candidate, ErrorKind, FileError, LineRange, Outcome, Position, Region, ScanEvent,
+};
 use serde_json::Value;
 
-use super::{Format, Output, Sort};
+use super::{ExitStatus, Format, Output, Sort};
 
 fn candidate(path: &str, lines: Option<LineRange>) -> Candidate {
     let lines = lines.unwrap_or(LineRange { start: 1, end: 1 });
@@ -45,7 +47,7 @@ fn assessment(outcome: Outcome, confidence: f64) -> Assessment {
 fn score_order_preserves_assessments_and_summary() -> anyhow::Result<()> {
     let mut runs = Vec::new();
     for sort in [Sort::None, Sort::Score] {
-        let mut output = Output::new(Vec::new(), Format::Json, false, sort, 0.8);
+        let mut output = Output::new(Vec::new(), Format::Json, false, false, sort, 0.8);
         for (path, line, probability, confidence) in [
             ("a.rs", 10, 0.9, 0.9),
             ("d.rs", 1, 0.01, 0.98),
@@ -75,8 +77,13 @@ fn score_order_preserves_assessments_and_summary() -> anyhow::Result<()> {
                 assessment: Box::new(answer),
             })?;
         }
-        output.error(Some("failed.rs"), None, "request failed")?;
-        assert_eq!(output.finish()?, 2);
+        output.error(
+            Some("failed.rs"),
+            None,
+            ErrorKind::Transport,
+            "request failed",
+        )?;
+        assert_eq!(output.finish()?, ExitStatus::Error);
         let records = std::str::from_utf8(&output.writer)?
             .lines()
             .map(serde_json::from_str::<Value>)
@@ -98,7 +105,7 @@ fn score_order_preserves_assessments_and_summary() -> anyhow::Result<()> {
 
 #[test]
 fn json_retains_uncertainty_and_errors_take_exit_precedence() -> anyhow::Result<()> {
-    let mut output = Output::new(Vec::new(), Format::Json, false, Sort::None, 0.8);
+    let mut output = Output::new(Vec::new(), Format::Json, false, false, Sort::None, 0.8);
     output.scan_event(ScanEvent::Result {
         candidate: candidate("a.py", Some(LineRange { start: 3, end: 9 })),
         assessment: Box::new(Assessment {
@@ -117,12 +124,13 @@ fn json_retains_uncertainty_and_errors_take_exit_precedence() -> anyhow::Result<
             }),
         }),
     })?;
-    output.scan_event(ScanEvent::Error(ev_grep_core::FileError::new(
-        "b.py",
-        None,
-        "request failed",
-    )))?;
-    assert_eq!(output.finish()?, 2);
+    output.scan_event(ScanEvent::Error(FileError {
+        path: "b.py".into(),
+        lines: None,
+        kind: ErrorKind::Timeout,
+        message: "request failed".into(),
+    }))?;
+    assert_eq!(output.finish()?, ExitStatus::Error);
     let records: Vec<Value> = std::str::from_utf8(&output.writer)?
         .lines()
         .map(serde_json::from_str)
@@ -132,6 +140,7 @@ fn json_retains_uncertainty_and_errors_take_exit_precedence() -> anyhow::Result<
     assert!(records[0]["data"]["assessment"].get("outcome").is_none());
     assert_eq!(records[0]["data"]["routing"]["outcome"], "uncertain");
     assert_eq!(records[0]["data"]["routing"]["reason"], "low_confidence");
+    assert_eq!(records[1]["data"]["kind"], "timeout");
     assert_eq!(records[2]["type"], "summary");
     assert_eq!(records[2]["data"]["errors"], 1);
     assert_eq!(records[2]["data"]["selected"], 2);
@@ -159,12 +168,12 @@ fn uncertainty_reports_the_model_choice_or_the_exact_routing_threshold() -> anyh
         let answer = assessment(choice, confidence);
         let original = serde_json::to_value(&answer)?;
         for format in [Format::Text, Format::Json] {
-            let mut output = Output::new(Vec::new(), format, false, Sort::None, threshold);
+            let mut output = Output::new(Vec::new(), format, false, false, Sort::None, threshold);
             output.scan_event(ScanEvent::Result {
                 candidate: candidate("sample.py", None),
                 assessment: Box::new(answer.clone()),
             })?;
-            assert_eq!(output.finish()?, 3);
+            assert_eq!(output.finish()?, ExitStatus::Uncertain);
             if format == Format::Text {
                 assert!(std::str::from_utf8(&output.writer)?.contains(explanation));
             } else {

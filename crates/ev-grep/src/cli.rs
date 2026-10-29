@@ -1,11 +1,10 @@
 use std::{fs::File, io, path::PathBuf};
 
-use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use ev_grep_core::{MAX_QUERY_BYTES, read_text};
 use ev_grep_jev::Provider;
 
-use crate::output::Sort;
+use crate::{error::Error, output::Sort, telemetry::Environment};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -32,7 +31,7 @@ pub(crate) struct Cli {
     pub candidates: Option<PathBuf>,
 
     /// Assess one JSON value from FILE, or stdin with '-', using the context-question prompt.
-    #[arg(long, value_name = "FILE", conflicts_with_all = ["stdin", "candidates", "context", "glob", "sort"])]
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["stdin", "candidates", "context", "glob", "sort", "strict", "max_candidates"])]
     pub state: Option<PathBuf>,
 
     /// Supply a supporting file or PATH:N-M range for every candidate; repeat for more sources.
@@ -50,6 +49,10 @@ pub(crate) struct Cli {
     /// Supported pinned model ID for the selected provider.
     #[arg(long, env = "EV_GREP_MODEL")]
     pub model: Option<String>,
+
+    /// Send --model even when the supported-model table omits it; the begin record marks it unvalidated.
+    #[arg(long, requires = "model")]
+    pub unvalidated_model: bool,
 
     /// Send requests to this trusted, protocol-compatible endpoint.
     #[arg(long, env = "EV_GREP_ENDPOINT")]
@@ -74,6 +77,28 @@ pub(crate) struct Cli {
     /// Inspect file selection and size limits without credentials or API requests.
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Exit 2 when a file is skipped for exceeding the 64 KiB file limit.
+    #[arg(long)]
+    pub strict: bool,
+
+    /// Fail before any request when more than N files, line ranges, or candidate records are selected.
+    #[arg(long, value_name = "N")]
+    pub max_candidates: Option<usize>,
+
+    /// Write a JSON Lines trace of spans and events to PATH, or to stderr with '-'.
+    #[arg(long, env = "EV_GREP_TRACE", value_name = "PATH")]
+    pub trace: Option<PathBuf>,
+
+    /// Environment that the trace's first record names; the default is ci when CI is set, otherwise local.
+    #[arg(
+        long,
+        env = "EV_GREP_TRACE_ENVIRONMENT",
+        value_enum,
+        default_value_t = Environment::detect(),
+        hide_default_value = true
+    )]
+    pub trace_environment: Environment,
 }
 
 fn confidence(value: &str) -> std::result::Result<f64, String> {
@@ -85,7 +110,7 @@ fn confidence(value: &str) -> std::result::Result<f64, String> {
 }
 
 impl Cli {
-    pub(crate) fn query_and_targets(&self) -> Result<(String, Vec<String>)> {
+    pub(crate) fn query_and_targets(&self) -> Result<(String, Vec<String>), Error> {
         let piped = self.stdin || self.candidates.is_some() || self.state.is_some();
         let source_stdin = self.stdin
             || self
@@ -96,36 +121,34 @@ impl Cli {
                 .candidates
                 .as_ref()
                 .is_some_and(|path| path.as_os_str() == "-");
-        ensure!(
-            !(source_stdin
-                && self
-                    .query_file
-                    .as_ref()
-                    .is_some_and(|path| path.as_os_str() == "-")),
-            "stdin cannot contain both query and source"
-        );
+        if source_stdin
+            && self
+                .query_file
+                .as_ref()
+                .is_some_and(|path| path.as_os_str() == "-")
+        {
+            return Err(Error::StdinTwice);
+        }
         let (query, paths) = if let Some(path) = &self.query_file {
             let query = if path.as_os_str() == "-" {
                 read_text(io::stdin().lock(), MAX_QUERY_BYTES)?
             } else {
                 read_text(
-                    File::open(path)
-                        .with_context(|| format!("cannot read query file {}", path.display()))?,
+                    File::open(path).map_err(|source| Error::QueryFile {
+                        path: path.clone(),
+                        source,
+                    })?,
                     MAX_QUERY_BYTES,
                 )?
             };
             (query, self.inputs.as_slice())
         } else {
-            let (query, paths) = self
-                .inputs
-                .split_first()
-                .context("provide a query or --query-file")?;
+            let (query, paths) = self.inputs.split_first().ok_or(Error::MissingQuery)?;
             (read_text(query.as_bytes(), MAX_QUERY_BYTES)?, paths)
         };
-        ensure!(
-            !piped || paths.is_empty(),
-            "stdin, candidate, and state inputs cannot be combined with paths"
-        );
+        if piped && !paths.is_empty() {
+            return Err(Error::PathsWithInput);
+        }
         let targets = if paths.is_empty() && !piped {
             vec![".".to_owned()]
         } else {

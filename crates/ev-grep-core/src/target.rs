@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Result, bail};
+use crate::Error;
 
 /// Lines counted from 1, inclusive at both ends.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -32,7 +32,7 @@ pub struct Target {
 impl Target {
     /// Parses `PATH`, `PATH:N`, or `PATH:N-M`. An argument naming an existing path is never split,
     /// so a file whose name ends in `:12` stays searchable.
-    pub fn parse(argument: &str) -> Result<Self> {
+    pub fn parse(argument: &str) -> Result<Self, Error> {
         let whole = Self {
             path: PathBuf::from(argument),
             lines: None,
@@ -55,7 +55,9 @@ impl Target {
                 path: PathBuf::from(path),
                 lines: Some(LineRange { start, end }),
             }),
-            _ => bail!("invalid line range {range:?}; use N or N-M, counting lines from 1"),
+            _ => Err(Error::InvalidLineRange {
+                range: range.to_owned(),
+            }),
         }
     }
 }

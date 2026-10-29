@@ -1,5 +1,6 @@
-use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
+
+use crate::Error;
 
 /// Zero-based Unicode character position. Newlines advance the line and reset the column.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -9,20 +10,26 @@ pub struct Position {
 }
 
 impl Position {
-    pub fn advance(self, text: &str) -> Result<Self> {
+    pub fn advance(self, text: &str) -> Result<Self, Error> {
         let mut position = self;
         for character in text.chars() {
             if character == '\n' {
-                position.line = position.line.checked_add(1).context("line overflow")?;
+                position.line = position
+                    .line
+                    .checked_add(1)
+                    .ok_or(Error::PositionOverflow)?;
                 position.column = 0;
             } else {
-                position.column = position.column.checked_add(1).context("column overflow")?;
+                position.column = position
+                    .column
+                    .checked_add(1)
+                    .ok_or(Error::PositionOverflow)?;
             }
         }
         Ok(position)
     }
 
-    fn offset(self, text: &str) -> Result<usize> {
+    fn offset(self, text: &str) -> Result<usize, Error> {
         let mut position = Self::default();
         for (offset, character) in text.char_indices() {
             if position == self {
@@ -35,7 +42,9 @@ impl Position {
                 position.column += 1;
             }
         }
-        ensure!(position == self, "position is outside context");
+        if position != self {
+            return Err(Error::PositionOutsideContext);
+        }
         Ok(text.len())
     }
 }
@@ -50,13 +59,13 @@ pub struct Region {
 }
 
 impl Region {
-    pub fn from_offsets(source: &str, offsets: std::ops::Range<usize>) -> Result<Self> {
+    pub fn from_offsets(source: &str, offsets: std::ops::Range<usize>) -> Result<Self, Error> {
         let prefix = source
             .get(..offsets.start)
-            .context("invalid start offset")?;
+            .ok_or(Error::InvalidStartOffset)?;
         let text = source
             .get(offsets.clone())
-            .context("invalid source range")?;
+            .ok_or(Error::InvalidSourceRange)?;
         let start = Position::default().advance(prefix)?;
         Ok(Self {
             start,
@@ -65,29 +74,27 @@ impl Region {
         })
     }
 
-    pub fn validate(&self, text: &str, context: Option<&str>) -> Result<()> {
-        ensure!(
-            self.start.advance(text)? == self.end,
-            "range does not match text extent"
-        );
-        ensure!(
-            self.end.line < usize::MAX && self.end.column < usize::MAX,
-            "position is too large"
-        );
-        if let Some(bytes) = &self.byte_offset {
-            ensure!(
-                bytes.end.checked_sub(bytes.start) == Some(text.len()),
-                "byte offsets do not match text length"
-            );
+    pub fn validate(&self, text: &str, context: Option<&str>) -> Result<(), Error> {
+        if self.start.advance(text)? != self.end {
+            return Err(Error::RangeExtent);
+        }
+        if self.end.line == usize::MAX || self.end.column == usize::MAX {
+            return Err(Error::PositionTooLarge);
+        }
+        if let Some(bytes) = &self.byte_offset
+            && bytes.end.checked_sub(bytes.start) != Some(text.len())
+        {
+            return Err(Error::ByteOffsetLength);
         }
         if let Some(context) = context {
             let offsets = self.start.offset(context)?..self.end.offset(context)?;
-            ensure!(
-                context.get(offsets.clone()) == Some(text),
-                "context slice does not match candidate text"
-            );
-            if let Some(bytes) = &self.byte_offset {
-                ensure!(*bytes == offsets, "byte offsets disagree with context");
+            if context.get(offsets.clone()) != Some(text) {
+                return Err(Error::ContextMismatch);
+            }
+            if let Some(bytes) = &self.byte_offset
+                && *bytes != offsets
+            {
+                return Err(Error::ByteOffsetContext);
             }
         }
         Ok(())

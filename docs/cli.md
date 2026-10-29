@@ -14,7 +14,33 @@ ev-grep 'Performs database operations' src/ --glob '*.rs'
 ev-grep 'Performs database operations' src/ --glob '!**/generated/**'
 ```
 
-Directory searches respect ignore files and skip hidden files. Explicit file paths bypass ignore files, but glob filters still apply. Globs use gitignore syntax; later matches take precedence. They cannot re-include files inside an ignored directory. Overlapping paths are evaluated once.
+Directory searches respect ignore files and skip hidden files. Explicit file paths bypass ignore files, but glob filters still apply. Globs use gitignore syntax; later matches take precedence. A glob that excludes a directory, such as `--glob '!vendor'`, skips everything inside it. Globs cannot re-include files inside a directory that a glob or an ignore file excludes. Overlapping paths are evaluated once.
+
+## Skip large files
+
+```sh
+ev-grep 'Performs database operations' . --strict
+```
+
+ev-grep reads at most 64 KiB (65,536 bytes) from each file and never truncates one. It skips a larger file, such as a
+lockfile or a long changelog, and sends no request for it. JSON reports it as a `skipped` record with reason
+`too_large` and the file's `bytes`; text output names it on stderr. The summary counts it under `skipped`.
+
+A skipped file does not change the exit code. Add `--strict` to exit 2 when any file is skipped as too large, so a
+script notices source that was not searched. Use `--glob` to leave such files out. A
+[line range](#search-part-of-a-file) does not help, because it still needs its whole file within 64 KiB.
+
+## Limit the selection
+
+```sh
+ev-grep 'Performs database operations' src/ --max-candidates 200
+```
+
+Each selected file, line range, or candidate record gets its own assessment, which may incur charges.
+`--max-candidates N` counts the selection before the first request. When more than N are selected, ev-grep reports a
+`too_large` error, sends no request, and exits 2. A selection of N or fewer runs unchanged. Skipped files count toward
+N; symbolic links and path errors do not. With `--candidates`, ev-grep reads up to N + 1 records before it starts.
+Combine it with `--dry-run` to check a selection without a key.
 
 ## Search part of a file
 
@@ -82,7 +108,8 @@ inside the state. It uses the same context classifier as the Rust `Evaluator::as
 affirmative answer, `no_match` is a negative answer, and `uncertain` retains uncertainty. The answer concerns only
 the supplied question and state.
 
-State input cannot be combined with paths, `--stdin`, `--candidates`, `--context`, or an explicit `--sort` option.
+State input cannot be combined with paths, `--stdin`, `--candidates`, `--context`, `--strict`, `--max-candidates`, or
+an explicit `--sort` option.
 The query and state cannot both read stdin. Add `--dry-run --json` to inspect the parsed state and its content-derived
 `input_id` without credentials or requests.
 
@@ -133,7 +160,8 @@ ev-grep 'Performs database operations' src/ --dry-run
 ```
 
 A dry run lists selected text files and line ranges with their combined source sizes. Add `--json` to inspect the
-exact candidate and supporting text. It makes no API requests and needs no key.
+exact candidate and supporting text. It makes no API requests and needs no key. It reports files over 64 KiB as
+skipped, and `--strict` and `--max-candidates` apply as they do to a search.
 
 ## Sort results
 
@@ -156,6 +184,22 @@ ev-grep 'Catches a database failure and returns an empty result' src/ --jobs 2
 
 Up to four requests run at once by default. `--jobs` accepts 1 to 256. Lower it when sharing a provider account with other tools. More jobs do not reduce the number of requests.
 
+## Trace a search
+
+```sh
+ev-grep 'Retries failed requests with a delay' src/ --trace trace.jsonl
+EV_GREP_TRACE=- ev-grep 'Retries failed requests with a delay' src/
+```
+
+`--trace PATH` writes a JSON Lines trace of the search to PATH, replacing the file; `-` writes it to stderr.
+`EV_GREP_TRACE` sets the same path. The trace times each file, request, wait, and attempt, and records sizes, HTTP
+statuses, error kinds, retry delays, and provider request identifiers. It never records the query, source text, the
+API key, request headers, or provider messages.
+
+Tracing does not change results, exit codes, or requests. The search never selects its own trace file. A trace that
+cannot be created is an error before any request; a failed write later does not stop the search.
+See [Output](./output.md#traces) for the records.
+
 ## Options
 
 ```text
@@ -173,15 +217,21 @@ ev-grep [OPTIONS] --query-file <FILE> [PATHS]...
 | `-g, --glob GLOB` | Filter paths; repeat to add filters, prefix with `!` to exclude |
 | `--provider PROVIDER` | `openrouter` (default) or `typesafe` |
 | `--model MODEL` | A supported pinned model for the selected provider |
+| `--unvalidated-model` | Send `--model` even when the [supported-model table](./providers.md#models) omits it |
 | `-j, --jobs N` | Maximum concurrent requests (default 4) |
 | `--min-confidence N` | Route answers below N to uncertain; 0 to 1 (default 0.8) |
 | `--sort ORDER` | `none` streams results (default); `score` sorts by descending match probability |
 | `--json` | Write versioned JSON Lines to stdout |
 | `--dry-run` | Inspect selected input without credentials or API requests |
+| `--strict` | Exit 2 when a file is skipped for exceeding 64 KiB |
+| `--max-candidates N` | Fail before any request when more than N inputs are selected |
+| `--trace PATH` | Write a JSON Lines trace to PATH; `-` writes stderr |
+| `--trace-environment ENV` | `local`, `ci`, or `release` in the trace's first record |
 | `-h, --help` | Show usage |
 | `-V, --version` | Show the executable version |
 
-Empty queries fail. Directory symlinks are not followed; explicit symlinks and special files are errors.
-Paths and text must be valid UTF-8. Files containing NUL bytes are skipped as binary. Other invalid UTF-8 inputs are errors.
+Empty queries fail. Directory searches do not follow symbolic links; they report each one as a `symlink` skip. Explicit symlinks and special files are errors.
+Paths and text must be valid UTF-8. Files containing NUL bytes are skipped as binary, and files over 64 KiB as
+`too_large`. Other invalid UTF-8 inputs are errors.
 
 See [Output](./output.md) for exit codes and JSONL, and [Request limits](./limits.md) for size limits.
