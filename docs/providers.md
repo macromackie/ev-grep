@@ -16,10 +16,10 @@ ev-grep --provider typesafe 'Performs database operations' src/
 
 ## Models
 
-| Provider | Credential | Supported models, default first |
-| --- | --- | --- |
-| `openrouter` | `OPENROUTER_API_KEY` | `typesafe/jev-1.13-20260917` |
-| `typesafe` | `TYPESAFE_API_KEY` | `jev-1.13.0` |
+| Provider     | Credential           | Supported models, default first |
+| ------------ | -------------------- | ------------------------------- |
+| `openrouter` | `OPENROUTER_API_KEY` | `typesafe/jev-1.13-20260917`    |
+| `typesafe`   | `TYPESAFE_API_KEY`   | `jev-1.13.0`                    |
 
 ```sh
 ev-grep --provider openrouter --model typesafe/jev-1.13-20260917 \

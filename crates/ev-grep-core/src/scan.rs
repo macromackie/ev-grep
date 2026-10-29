@@ -1,32 +1,35 @@
-use std::future::Future;
-
-use futures_util::{FutureExt, Stream, StreamExt};
+use futures_util::{FutureExt as _, Stream, StreamExt as _};
 use serde::Serialize;
-use tracing::Instrument;
+use tracing::Instrument as _;
 
 use crate::{
-    Assessment, Candidate, Error, Failure, FileError, Input, LineRange, Loaded, SupportingSource,
+    Assessment,
+    Candidate,
+    Failure,
+    FileError,
+    Input,
+    InputError,
+    LineRange,
+    Loaded,
+    SupportingSource,
     telemetry,
 };
 
+/// A model backend that answers questions about candidates and labeled context.
 pub trait Evaluator: Sync {
-    /// Why an assessment produced no answer. The core's validation errors convert into it, and its kind classifies
-    /// the failed file in a scan.
-    type Error: Failure + From<Error> + Send + Sync + 'static;
+    /// Why an assessment produced no answer. The core's validation errors convert into it, and its
+    /// kind classifies the failed file in a scan.
+    type Error: Failure + From<InputError> + Send + Sync + 'static;
 
+    /// Assess whether `candidate` matches `query`.
     fn assess(
         &self,
         query: &str,
         candidate: &Candidate,
     ) -> impl Future<Output = Result<Assessment, Self::Error>> + Send;
 
-    fn assess_questions(
-        &self,
-        questions: &[crate::Question<'_>],
-        state: &serde_json::Value,
-    ) -> impl Future<Output = Result<crate::DecisionBatch, Self::Error>> + Send;
-
     /// Assess labeled context without assuming it is one source file.
+    #[inline]
     fn assess_context(
         &self,
         query: &str,
@@ -39,9 +42,17 @@ pub trait Evaluator: Sync {
                 .into_single()?)
         }
     }
+
+    /// Answer several named questions about labeled `state` in one request.
+    fn assess_questions(
+        &self,
+        questions: &[crate::Question<'_>],
+        state: &serde_json::Value,
+    ) -> impl Future<Output = Result<crate::DecisionBatch, Self::Error>> + Send;
 }
 
-/// Why a selected file was not assessed. JSON skip records name it as `reason`, with the variant's fields beside it.
+/// Why a selected file was not assessed. JSON skip records name it as `reason`, with the variant's
+/// fields beside it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum SkipReason {
@@ -53,39 +64,49 @@ pub enum SkipReason {
     TooLarge { bytes: u64 },
 }
 
+/// One per-input outcome that a scan emits.
 #[derive(Debug)]
 pub enum ScanEvent {
+    Error(FileError),
     Result {
-        candidate: Candidate,
         assessment: Box<Assessment>,
+        candidate: Candidate,
     },
     Skipped {
-        path: String,
         lines: Option<LineRange>,
+        path: String,
         reason: SkipReason,
     },
-    Error(FileError),
 }
 
-/// All input modes share this bounded assessment pool. The scan stops at the first error that `emit` returns, and at
-/// the first evaluator error whose kind is fatal, which it returns instead of reporting a failed file. Stopping drops
-/// the assessments still in flight. Each input runs in an `ev_grep.file` tracing span.
-pub async fn scan_inputs<E: Evaluator, EmitError: From<Error> + From<E::Error>>(
-    inputs: impl Stream<Item = Input>,
+/// Assesses each input in a bounded pool that all input modes share.
+///
+/// The scan stops at the first error that `emit` returns, and at the first evaluator error whose
+/// kind is fatal, which it returns instead of reporting a failed file. Stopping drops the
+/// assessments still in flight. Each input runs in an `ev_grep.file` tracing span.
+#[inline]
+pub async fn scan_inputs<Inputs, Assessor, Emit, EmitError>(
+    inputs: Inputs,
     query: &str,
     supporting: &[SupportingSource],
-    evaluator: &E,
+    evaluator: &Assessor,
     jobs: usize,
-    mut emit: impl FnMut(ScanEvent) -> Result<(), EmitError>,
-) -> Result<(), EmitError> {
+    mut emit: Emit,
+) -> Result<(), EmitError>
+where
+    Inputs: Stream<Item = Input>,
+    Assessor: Evaluator,
+    Emit: FnMut(ScanEvent) -> Result<(), EmitError>,
+    EmitError: From<InputError> + From<Assessor::Error>,
+{
     if !(1..=256).contains(&jobs) {
-        return Err(Error::Jobs.into());
+        return Err(InputError::Jobs.into());
     }
     let pending = inputs
         .map(|input| {
-            let span = telemetry::file(&input);
+            let span = telemetry::create_file_span(&input);
             async move {
-                let candidate = match input.load(supporting) {
+                let candidate = match input.read(supporting) {
                     Ok(Loaded::Candidate(candidate)) => candidate,
                     Ok(Loaded::Skipped { target, reason }) => {
                         return Ok(ScanEvent::Skipped {
@@ -93,24 +114,28 @@ pub async fn scan_inputs<E: Evaluator, EmitError: From<Error> + From<E::Error>>(
                             lines: target.lines,
                             reason,
                         });
-                    }
+                    },
                     Err(error) => return Ok(ScanEvent::Error(error)),
                 };
-                telemetry::loaded(&candidate);
+                telemetry::record_loaded(&candidate);
                 match evaluator.assess(query, &candidate).await {
-                    Ok(assessment) => Ok(ScanEvent::Result {
-                        candidate,
-                        assessment: Box::new(assessment),
-                    }),
-                    Err(error) if error.kind().fatal() => Err(error),
-                    Err(error) => Ok(ScanEvent::Error(FileError::new(
-                        candidate.file.as_deref().unwrap_or("<stdin>"),
-                        Some(candidate.range.lines()),
-                        &error,
-                    ))),
+                    Ok(assessment) => {
+                        Ok(ScanEvent::Result {
+                            candidate,
+                            assessment: Box::new(assessment),
+                        })
+                    },
+                    Err(error) if error.classify().is_fatal() => Err(error),
+                    Err(error) => {
+                        Ok(ScanEvent::Error(FileError::new(
+                            candidate.file.as_deref().unwrap_or("<stdin>"),
+                            Some(candidate.range.to_lines()),
+                            &error,
+                        )))
+                    },
                 }
             }
-            .inspect(telemetry::file_finished)
+            .inspect(telemetry::record_file_finished)
             .instrument(span)
         })
         .buffer_unordered(jobs);

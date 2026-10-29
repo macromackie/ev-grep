@@ -1,0 +1,59 @@
+---
+# The strictest zizmor settings that code-lint-strictness requires.
+# zizmor runs every audit by default; this file sets the strictest policy of each audit that takes one, and turns none off.
+#
+# zizmor reads only its own file, so copy this file to `.github/zizmor.yml`.
+# List each action the workflows use under `forbidden-uses` in that copy, as an owner, `owner/repo`, or `owner/repo@ref` pattern.
+# Here, each audit's `ignore` entry names the core release.yml, which cargo-dist generates:
+# `dist generate` rewrites it, so hand edits there do not last.
+# Run it from the repository root with the auditor persona, which reports every finding of every audit:
+#   zizmor --persona=auditor --strict-collection .
+# Give the run a read-only GitHub token in `GH_TOKEN`, because online audits such as impostor-commit,
+# ref-confusion, and known-vulnerable-actions run only with one.
+# Any finding, informational ones included, ends zizmor with a nonzero exit code.
+# A new zizmor version adds audits, so this file is tested against zizmor 1.31.1;
+# pin that exact version and raise it in a reviewed upgrade.
+
+"rules":
+  "anonymous-definition":
+    "ignore":
+      - "release.yml"
+  "concurrency-limits":
+    "ignore":
+      - "release.yml"
+  "excessive-permissions":
+    "ignore":
+      - "release.yml"
+  "forbidden-uses":
+    "config":
+      # Each action the workflows use.
+      "allow":
+        - "actions/cache"
+        - "actions/cache/restore"
+        - "actions/cache/save"
+        - "actions/checkout"
+        - "actions/download-artifact"
+        - "actions/upload-artifact"
+        - "jdx/mise-action"
+        - "swatinem/rust-cache"
+  "secrets-inherit":
+    "ignore":
+      - "release.yml"
+  "self-repository":
+    "ignore":
+      - "release.yml"
+  "template-injection":
+    "ignore":
+      - "release.yml"
+  "undocumented-permissions":
+    "ignore":
+      - "release.yml"
+  "unpinned-images":
+    "ignore":
+      - "release.yml"
+  "unpinned-uses":
+    "config":
+      "policies":
+        # Every action, first-party ones included, is pinned to a full commit hash.
+        "*": "hash-pin"
+...

@@ -1,21 +1,25 @@
-//! The trace that `--trace` writes: one JSON record per line, holding ev-grep's spans and events. Its first record names
-//! the trace schema, the binary's version and revision, and the environment. Records hold statuses, kinds, sizes,
-//! counts, paths, identifiers, and durations, never the query, source text, a credential, or a provider message.
+//! The trace that `--trace` writes: one JSON record per line, holding ev-grep's spans and events.
+//!
+//! Its first record names the trace schema, the binary's version and revision, and the environment.
+//! Records hold statuses, kinds, sizes, counts, paths, identifiers, and durations, never the query,
+//! source text, a credential, or a provider message.
 
-use std::{fs::File, path::Path, sync::Arc};
+use alloc::sync::Arc;
+use std::{env, fs::File, path::Path};
 
 use clap::ValueEnum;
 use tracing::{Level, Span, field};
 use tracing_subscriber::{
     filter::Targets,
-    fmt::{format::FmtSpan, writer::BoxMakeWriter},
+    fmt::{self, format::FmtSpan, writer::BoxMakeWriter},
     prelude::*,
 };
 
-use crate::{error::Error, output};
+use crate::{error::CliError, output};
 
-/// The version of the trace's record shapes. Raise it when a record's fields change meaning or a field is removed.
-pub(crate) const TRACE_SCHEMA_VERSION: u32 = 1;
+/// The version of the trace's record shapes. Raise it when a record's fields change meaning or a
+/// field is removed.
+pub(crate) const TRACE_SCHEMA_VERSION: u32 = 2;
 
 /// The events ev-grep records. Each event names its member in an `event` field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,15 +39,15 @@ impl LogEvent {
 /// Where a trace was recorded, which its first record names.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum Environment {
-    Local,
     Ci,
+    Local,
     Release,
 }
 
 impl Environment {
     /// `ci` when the `CI` variable that CI services set is present, otherwise `local`.
     pub(crate) fn detect() -> Self {
-        if std::env::var_os("CI").is_some_and(|value| !value.is_empty()) {
+        if env::var_os("CI").is_some_and(|value| !value.is_empty()) {
             Self::Ci
         } else {
             Self::Local
@@ -52,23 +56,27 @@ impl Environment {
 
     const fn name(self) -> &'static str {
         match self {
-            Self::Local => "local",
             Self::Ci => "ci",
+            Self::Local => "local",
             Self::Release => "release",
         }
     }
 }
 
-/// Writes the trace to `path`, or to stderr for `-`, and records its first event. Only the ev-grep crates' records at
-/// INFO are kept: the HTTP client's own records name endpoints and connections. Each span records its duration when it
-/// closes. A failed write does not change the search.
-pub(crate) fn install(path: &Path, environment: Environment) -> Result<(), Error> {
+/// Writes the trace to `path`, or to stderr for `-`, and records its first event.
+///
+/// Only the ev-grep crates' records at INFO are kept: the HTTP client's own records name endpoints
+/// and connections. Each span records its duration when it closes. A failed write does not change
+/// the search.
+pub(crate) fn install(path: &Path, environment: Environment) -> Result<(), CliError> {
     let writer = if path.as_os_str() == "-" {
-        BoxMakeWriter::new(output::stderr)
+        BoxMakeWriter::new(output::open_stderr)
     } else {
-        let file = File::create(path).map_err(|source| Error::Trace {
-            path: path.to_path_buf(),
-            source,
+        let file = File::create(path).map_err(|source| {
+            CliError::Trace {
+                path: path.to_path_buf(),
+                source,
+            }
         })?;
         BoxMakeWriter::new(Arc::new(file))
     };
@@ -76,7 +84,7 @@ pub(crate) fn install(path: &Path, environment: Environment) -> Result<(), Error
         // The prefix also selects ev_grep_core and ev_grep_jev.
         .with(Targets::new().with_target("ev_grep", Level::INFO))
         .with(
-            tracing_subscriber::fmt::layer()
+            fmt::layer()
                 .json()
                 .with_writer(writer)
                 .with_span_events(FmtSpan::CLOSE),

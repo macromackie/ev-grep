@@ -1,16 +1,16 @@
 # Request limits
 
-| Resource | Limit |
-| --- | --- |
-| Concurrent requests | 4 by default; `--jobs 1..256` |
-| Individual attempt timeout | 5 seconds |
-| Assessment timeout, including retries | 15 seconds |
-| Each source file read from disk | 64 KiB |
-| Candidate original source plus all supporting text | 64 KiB |
-| Encoded candidate JSON line | 512 KiB |
-| Query | 8 KiB |
-| Encoded request | 96 KiB |
-| Response | 64 KiB |
+| Resource                                           | Limit                         |
+| -------------------------------------------------- | ----------------------------- |
+| Concurrent requests                                | 4 by default; `--jobs 1..256` |
+| Individual attempt timeout                         | 5 seconds                     |
+| Assessment timeout, including retries              | 15 seconds                    |
+| Each source file read from disk                    | 64 KiB                        |
+| Candidate original source plus all supporting text | 64 KiB                        |
+| Encoded candidate JSON line                        | 512 KiB                       |
+| Query                                              | 8 KiB                         |
+| Encoded request                                    | 96 KiB                        |
+| Response                                           | 64 KiB                        |
 
 A searched file over 64 KiB is [skipped](./cli.md#skip-large-files) as `too_large` and counted in the summary; it
 exits 2 only with `--strict`. A `--context` or `--state` file over 64 KiB, or exceeding any other limit, produces an

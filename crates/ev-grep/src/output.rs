@@ -1,16 +1,26 @@
+use core::mem;
 use std::{
     io::{self, Write},
     process::ExitCode,
 };
 
-use crate::inputs::StateInput;
 use clap::ValueEnum;
 use ev_grep_core::{
-    Assessment, Candidate, ErrorKind, LineRange, MAX_FILE_BYTES, Outcome, ScanEvent, SkipReason,
-    Uncertainty, label,
+    Assessment,
+    Candidate,
+    ErrorKind,
+    LineRange,
+    MAX_FILE_BYTES,
+    Outcome,
+    ScanEvent,
+    SkipReason,
+    Uncertainty,
+    label,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
+
+use crate::inputs::StateInput;
 
 /// The version of the JSON Lines record shapes, which every record names.
 const SCHEMA_VERSION: u32 = 2;
@@ -30,7 +40,7 @@ pub(crate) enum ExitStatus {
 
 impl ExitStatus {
     /// The process exit code, which the trace's search span also records.
-    pub(crate) const fn code(self) -> u8 {
+    pub(crate) const fn to_code(self) -> u8 {
         match self {
             Self::Match => 0,
             Self::NoMatch => 1,
@@ -41,8 +51,9 @@ impl ExitStatus {
 }
 
 impl From<ExitStatus> for ExitCode {
+    #[inline]
     fn from(status: ExitStatus) -> Self {
-        Self::from(status.code())
+        Self::from(status.to_code())
     }
 }
 
@@ -51,7 +62,7 @@ impl From<ExitStatus> for ExitCode {
     clippy::disallowed_methods,
     reason = "the output module opens standard output, as cli-output-channels requires"
 )]
-pub(crate) fn stdout() -> io::StdoutLock<'static> {
+pub(crate) fn lock_stdout() -> io::StdoutLock<'static> {
     io::stdout().lock()
 }
 
@@ -60,14 +71,14 @@ pub(crate) fn stdout() -> io::StdoutLock<'static> {
     clippy::disallowed_methods,
     reason = "the output module opens standard error, as cli-output-channels requires"
 )]
-pub(crate) fn stderr() -> io::Stderr {
+pub(crate) fn open_stderr() -> io::Stderr {
     io::stderr()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Format {
-    Text,
     Json,
+    Text,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
@@ -78,6 +89,10 @@ pub(crate) enum Sort {
 }
 
 #[derive(Default, Serialize)]
+#[expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "the field order is the order of the summary's JSON keys"
+)]
 pub(crate) struct Summary {
     pub selected: usize,
     pub evaluated: usize,
@@ -96,7 +111,7 @@ pub(crate) struct Summary {
 }
 
 impl Summary {
-    pub(crate) fn exit_status(&self) -> ExitStatus {
+    pub(crate) const fn exit_status(&self) -> ExitStatus {
         if self.errors > 0 || (self.strict && self.too_large > 0) {
             ExitStatus::Error
         } else if self.uncertain > 0 {
@@ -109,240 +124,59 @@ impl Summary {
     }
 }
 
-pub(crate) struct Output<W> {
-    writer: W,
+pub(crate) struct Output<Writer> {
     format: Format,
-    sort: Sort,
     min_confidence: f64,
     pending: Vec<(Candidate, Assessment)>,
+    sort: Sort,
     summary: Summary,
+    writer: Writer,
 }
 
-impl<W: Write> Output<W> {
-    pub(crate) fn new(
-        writer: W,
-        format: Format,
-        dry_run: bool,
-        strict: bool,
-        sort: Sort,
-        min_confidence: f64,
-    ) -> Self {
-        Self {
-            writer,
-            format,
-            sort,
-            min_confidence,
-            pending: Vec::new(),
-            summary: Summary {
-                dry_run,
-                strict,
-                ..Summary::default()
-            },
-        }
-    }
+/// A record's data: the keys of `base` and the keys `added` to them.
+#[derive(Serialize)]
+struct Extended<Added, Base> {
+    #[serde(flatten)]
+    added: Added,
+    #[serde(flatten)]
+    base: Base,
+}
 
+impl<Writer> Output<Writer>
+where
+    Writer: Write,
+{
     pub(crate) fn begin(&mut self, data: Value) -> io::Result<()> {
-        self.event("begin", data)
-    }
-
-    fn event(&mut self, kind: &str, data: impl Serialize) -> io::Result<()> {
-        if self.format == Format::Json {
-            serde_json::to_writer(
-                &mut self.writer,
-                &json!({"schema_version": SCHEMA_VERSION, "type": kind, "data": data}),
-            )?;
-            writeln!(self.writer)?;
-            self.writer.flush()?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn error(
-        &mut self,
-        path: Option<&str>,
-        lines: Option<LineRange>,
-        kind: ErrorKind,
-        message: &str,
-    ) -> io::Result<()> {
-        self.summary.errors += 1;
-        if self.format == Format::Json {
-            self.event(
-                "error",
-                located(
-                    json!({ "file": path, "kind": kind, "message": message }),
-                    lines,
-                ),
-            )?;
-        } else {
-            writeln!(
-                stderr().lock(),
-                "ev-grep: {}{message}",
-                path.map(|p| format!("{}: ", label(p, lines)))
-                    .unwrap_or_default()
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Report a candidate selected by a dry run.
-    pub(crate) fn selected(&mut self, candidate: &Candidate) -> io::Result<()> {
-        self.summary.selected += 1;
-        let bytes = candidate.bytes();
-        match self.format {
-            Format::Json => {
-                let mut data = serde_json::to_value(candidate)?;
-                data["bytes"] = json!(bytes);
-                self.event("selected", data)?;
-            }
-            Format::Text => writeln!(self.writer, "{}\t{bytes} bytes", candidate.label())?,
-        }
-        Ok(())
-    }
-
-    pub(crate) fn select_state(&mut self, input: &StateInput) -> io::Result<()> {
-        self.summary.selected += 1;
-        if !self.summary.dry_run {
-            return Ok(());
-        }
-        match self.format {
-            Format::Json => self.event("selected_state", input)?,
-            Format::Text => writeln!(self.writer, "<state>\t{} bytes", input.bytes)?,
-        }
-        Ok(())
+        self.write_event("begin", data)
     }
 
     fn count_assessment(&mut self, assessment: &Assessment) {
-        self.summary.evaluated += 1;
+        self.summary.evaluated = self.summary.evaluated.saturating_add(1);
         match assessment.route(self.min_confidence).outcome {
-            Outcome::Match => self.summary.matches += 1,
-            Outcome::NoMatch => self.summary.no_match += 1,
-            Outcome::Uncertain => self.summary.uncertain += 1,
+            Outcome::Match => self.summary.matches = self.summary.matches.saturating_add(1),
+            Outcome::NoMatch => self.summary.no_match = self.summary.no_match.saturating_add(1),
+            Outcome::Uncertain => self.summary.uncertain = self.summary.uncertain.saturating_add(1),
         }
-    }
-
-    pub(crate) fn state_result(
-        &mut self,
-        input: &StateInput,
-        assessment: &Assessment,
-    ) -> io::Result<()> {
-        self.count_assessment(assessment);
-        let routing = assessment.route(self.min_confidence);
-        match self.format {
-            Format::Json => {
-                let mut data = serde_json::to_value(input)?;
-                data["assessment"] = raw_assessment(assessment);
-                data["routing"] = serde_json::to_value(routing)?;
-                self.event("assessment", data)?;
-            }
-            Format::Text => {
-                let answer = match routing.outcome {
-                    Outcome::Match => format!("match (confidence {})", assessment.confidence),
-                    Outcome::NoMatch => format!("no_match (confidence {})", assessment.confidence),
-                    Outcome::Uncertain => format!(
-                        "uncertain ({})",
-                        uncertainty(assessment, self.min_confidence)
-                    ),
-                };
-                writeln!(self.writer, "<state>\t{answer}")?;
-                self.writer.flush()?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Report the outcome of one selected input: a result, a skipped file, or an input error.
-    pub(crate) fn scan_event(&mut self, event: ScanEvent) -> io::Result<()> {
-        self.summary.selected += 1;
-        match event {
-            ScanEvent::Result {
-                candidate,
-                assessment,
-            } => {
-                self.count_assessment(&assessment);
-                let routing = assessment.route(self.min_confidence);
-                if self.sort == Sort::Score {
-                    if self.format == Format::Json || routing.outcome != Outcome::NoMatch {
-                        self.pending.push((candidate, *assessment));
-                    }
-                } else {
-                    self.result(&candidate, &assessment)?;
-                }
-            }
-            ScanEvent::Skipped {
-                path,
-                lines,
-                reason,
-            } => {
-                self.summary.skipped += 1;
-                if let SkipReason::TooLarge { bytes } = reason {
-                    self.summary.too_large += 1;
-                    if self.format == Format::Text {
-                        writeln!(
-                            stderr().lock(),
-                            "ev-grep: {}: skipped; file is {bytes} bytes; limit is {MAX_FILE_BYTES} bytes",
-                            label(&path, lines)
-                        )?;
-                    }
-                }
-                let mut data = serde_json::to_value(reason)?;
-                data["file"] = json!(path);
-                self.event("skipped", located(data, lines))?;
-            }
-            ScanEvent::Error(error) => {
-                self.error(Some(&error.path), error.lines, error.kind, &error.message)?
-            }
-        }
-        Ok(())
-    }
-
-    fn result(&mut self, candidate: &Candidate, assessment: &Assessment) -> io::Result<()> {
-        let routing = assessment.route(self.min_confidence);
-        match self.format {
-            Format::Json => {
-                let mut data = serde_json::to_value(candidate)?;
-                data["assessment"] = raw_assessment(assessment);
-                data["routing"] = serde_json::to_value(routing)?;
-                self.event("result", data)?;
-            }
-            Format::Text if routing.outcome != Outcome::NoMatch => {
-                if routing.outcome == Outcome::Match {
-                    writeln!(
-                        self.writer,
-                        "{}\t{:.0}% match",
-                        candidate.label(),
-                        match_probability(assessment) * 100.0
-                    )?;
-                } else {
-                    let explanation = uncertainty(assessment, self.min_confidence);
-                    writeln!(
-                        self.writer,
-                        "{}\tuncertain ({explanation})",
-                        candidate.label()
-                    )?;
-                }
-                self.writer.flush()?;
-            }
-            Format::Text => {}
-        }
-        Ok(())
     }
 
     pub(crate) fn finish(&mut self) -> io::Result<ExitStatus> {
-        self.pending.sort_by(|(a, a_score), (b, b_score)| {
-            match_probability(b_score)
-                .total_cmp(&match_probability(a_score))
-                .then_with(|| location(a).cmp(&location(b)))
-        });
-        for (candidate, assessment) in std::mem::take(&mut self.pending) {
-            self.result(&candidate, &assessment)?;
+        self.pending
+            .sort_by(|(left, left_assessment), (right, right_assessment)| {
+                match_probability(right_assessment)
+                    .total_cmp(&match_probability(left_assessment))
+                    .then_with(|| read_location(left).cmp(&read_location(right)))
+            });
+        for (candidate, assessment) in mem::take(&mut self.pending) {
+            self.write_result(&candidate, &assessment)?;
         }
         let status = self.summary.exit_status();
         if self.format == Format::Json {
-            self.event("summary", serde_json::to_value(&self.summary)?)?;
+            self.write_event("summary", serde_json::to_value(&self.summary)?)?;
         } else {
             writeln!(
-                stderr().lock(),
-                "{} selected · {} evaluated · {} match · {} no match · {} uncertain · {} skipped · {} errors{}",
+                open_stderr().lock(),
+                "{} selected · {} evaluated · {} match · {} no match · {} uncertain · {} skipped \
+                 · {} errors{}",
                 self.summary.selected,
                 self.summary.evaluated,
                 self.summary.matches,
@@ -359,21 +193,252 @@ impl<W: Write> Output<W> {
         }
         Ok(status)
     }
+
+    pub(crate) fn new(
+        writer: Writer,
+        format: Format,
+        dry_run: bool,
+        strict: bool,
+        sort: Sort,
+        min_confidence: f64,
+    ) -> Self {
+        Self {
+            format,
+            min_confidence,
+            pending: Vec::new(),
+            sort,
+            summary: Summary {
+                dry_run,
+                strict,
+                ..Summary::default()
+            },
+            writer,
+        }
+    }
+
+    /// Report the outcome of one selected input: a result, a skipped file, or an input error.
+    pub(crate) fn scan_event(&mut self, event: ScanEvent) -> io::Result<()> {
+        self.summary.selected = self.summary.selected.saturating_add(1);
+        match event {
+            ScanEvent::Result {
+                candidate,
+                assessment,
+            } => {
+                self.count_assessment(&assessment);
+                let routing = assessment.route(self.min_confidence);
+                match self.sort {
+                    Sort::None => self.write_result(&candidate, &assessment)?,
+                    Sort::Score
+                        if self.format == Format::Json || routing.outcome != Outcome::NoMatch =>
+                    {
+                        self.pending.push((candidate, *assessment));
+                    },
+                    // Text output never prints a nonmatch, so a score sort drops it.
+                    Sort::Score => {},
+                }
+            },
+            ScanEvent::Skipped {
+                path,
+                lines,
+                reason,
+            } => {
+                self.summary.skipped = self.summary.skipped.saturating_add(1);
+                if let SkipReason::TooLarge { .. } = reason {
+                    self.summary.too_large = self.summary.too_large.saturating_add(1);
+                }
+                if let SkipReason::TooLarge { bytes } = reason
+                    && self.format == Format::Text
+                {
+                    writeln!(
+                        open_stderr().lock(),
+                        "ev-grep: {}: skipped; file is {bytes} bytes; limit is {MAX_FILE_BYTES} \
+                         bytes",
+                        label(&path, lines)
+                    )?;
+                }
+                let data = Extended {
+                    added: json!({ "file": path }),
+                    base: reason,
+                };
+                self.write_event("skipped", attach_lines(data, lines))?;
+            },
+            ScanEvent::Error(error) => {
+                self.write_error(Some(&error.path), error.lines, error.kind, &error.message)?;
+            },
+        }
+        Ok(())
+    }
+
+    pub(crate) fn select_state(&mut self, input: &StateInput) -> io::Result<()> {
+        self.summary.selected = self.summary.selected.saturating_add(1);
+        if !self.summary.dry_run {
+            return Ok(());
+        }
+        match self.format {
+            Format::Json => self.write_event("selected_state", input)?,
+            Format::Text => writeln!(self.writer, "<state>\t{} bytes", input.bytes)?,
+        }
+        Ok(())
+    }
+
+    pub(crate) fn write_error(
+        &mut self,
+        path: Option<&str>,
+        lines: Option<LineRange>,
+        kind: ErrorKind,
+        message: &str,
+    ) -> io::Result<()> {
+        self.summary.errors = self.summary.errors.saturating_add(1);
+        if self.format == Format::Json {
+            self.write_event(
+                "error",
+                attach_lines(
+                    json!({ "file": path, "kind": kind, "message": message }),
+                    lines,
+                ),
+            )?;
+        } else {
+            writeln!(
+                open_stderr().lock(),
+                "ev-grep: {}{message}",
+                path.map(|file| format!("{}: ", label(file, lines)))
+                    .unwrap_or_default()
+            )?;
+        }
+        Ok(())
+    }
+
+    fn write_event(&mut self, kind: &str, data: impl Serialize) -> io::Result<()> {
+        if self.format == Format::Json {
+            serde_json::to_writer(
+                &mut self.writer,
+                &json!({"schema_version": SCHEMA_VERSION, "type": kind, "data": data}),
+            )?;
+            writeln!(self.writer)?;
+            self.writer.flush()?;
+        }
+        Ok(())
+    }
+
+    #[expect(
+        clippy::float_arithmetic,
+        reason = "the text output prints the match probability as a percentage"
+    )]
+    fn write_result(&mut self, candidate: &Candidate, assessment: &Assessment) -> io::Result<()> {
+        let routing = assessment.route(self.min_confidence);
+        match self.format {
+            Format::Json => {
+                self.write_event(
+                    "result",
+                    Extended {
+                        added: json!({
+                            "assessment": serialize_raw_assessment(assessment),
+                            "routing": routing,
+                        }),
+                        base: candidate,
+                    },
+                )?;
+            },
+            Format::Text if routing.outcome != Outcome::NoMatch => {
+                if routing.outcome == Outcome::Match {
+                    writeln!(
+                        self.writer,
+                        "{}\t{:.0}% match",
+                        candidate.label(),
+                        match_probability(assessment) * 100.0_f64
+                    )?;
+                } else {
+                    let explanation = describe_uncertainty(assessment, self.min_confidence);
+                    writeln!(
+                        self.writer,
+                        "{}\tuncertain ({explanation})",
+                        candidate.label()
+                    )?;
+                }
+                self.writer.flush()?;
+            },
+            Format::Text => {},
+        }
+        Ok(())
+    }
+
+    /// Report a candidate selected by a dry run.
+    pub(crate) fn write_selected(&mut self, candidate: &Candidate) -> io::Result<()> {
+        self.summary.selected = self.summary.selected.saturating_add(1);
+        let bytes = candidate.count_bytes();
+        match self.format {
+            Format::Json => {
+                self.write_event(
+                    "selected",
+                    Extended {
+                        added: json!({ "bytes": bytes }),
+                        base: candidate,
+                    },
+                )?;
+            },
+            Format::Text => writeln!(self.writer, "{}\t{bytes} bytes", candidate.label())?,
+        }
+        Ok(())
+    }
+
+    pub(crate) fn write_state_result(
+        &mut self,
+        input: &StateInput,
+        assessment: &Assessment,
+    ) -> io::Result<()> {
+        self.count_assessment(assessment);
+        let routing = assessment.route(self.min_confidence);
+        match self.format {
+            Format::Json => {
+                self.write_event(
+                    "assessment",
+                    Extended {
+                        added: json!({
+                            "assessment": serialize_raw_assessment(assessment),
+                            "routing": routing,
+                        }),
+                        base: input,
+                    },
+                )?;
+            },
+            Format::Text => {
+                let answer = match routing.outcome {
+                    Outcome::Match => format!("match (confidence {})", assessment.confidence),
+                    Outcome::NoMatch => format!("no_match (confidence {})", assessment.confidence),
+                    Outcome::Uncertain => {
+                        format!(
+                            "uncertain ({})",
+                            describe_uncertainty(assessment, self.min_confidence)
+                        )
+                    },
+                };
+                writeln!(self.writer, "<state>\t{answer}")?;
+                self.writer.flush()?;
+            },
+        }
+        Ok(())
+    }
 }
 
-fn uncertainty(assessment: &Assessment, minimum: f64) -> String {
+#[expect(
+    clippy::unreachable,
+    reason = "`Assessment::route` gives a reason exactly when the outcome is uncertain, and only \
+              then is this called"
+)]
+fn describe_uncertainty(assessment: &Assessment, minimum: f64) -> String {
     match assessment.route(minimum).reason {
         Some(Uncertainty::ModelUncertain) => "model chose uncertain".to_owned(),
-        Some(Uncertainty::LowConfidence) => format!(
-            "model chose {}; confidence {} < {}",
-            match assessment.choice {
-                Outcome::Match => "match",
-                Outcome::NoMatch => "no_match",
-                Outcome::Uncertain => "uncertain",
-            },
-            assessment.confidence,
-            minimum,
-        ),
+        Some(Uncertainty::LowConfidence) => {
+            format!(
+                "model chose {}; confidence {} < {minimum}",
+                match assessment.choice {
+                    Outcome::Match => "match",
+                    Outcome::NoMatch => "no_match",
+                    Outcome::Uncertain => "uncertain",
+                },
+                assessment.confidence,
+            )
+        },
         None => unreachable!("uncertain routing requires a reason"),
     }
 }
@@ -383,10 +448,10 @@ fn match_probability(assessment: &Assessment) -> f64 {
         .probabilities
         .get(&Outcome::Match)
         .copied()
-        .unwrap_or(0.0)
+        .unwrap_or(0.0_f64)
 }
 
-fn location(candidate: &Candidate) -> (Option<&str>, usize, usize, usize, usize) {
+fn read_location(candidate: &Candidate) -> (Option<&str>, usize, usize, usize, usize) {
     (
         candidate.file.as_deref(),
         candidate.range.start.line,
@@ -396,25 +461,27 @@ fn location(candidate: &Candidate) -> (Option<&str>, usize, usize, usize, usize)
     )
 }
 
-pub(crate) fn raw_assessment(assessment: &Assessment) -> Value {
+pub(crate) fn serialize_raw_assessment(assessment: &Assessment) -> Value {
     json!({
         "choice": assessment.choice,
         "confidence": assessment.confidence,
         "probabilities": assessment.probabilities,
         "model": assessment.model,
         "request": assessment.request,
-        "input_tokens": assessment.request.as_ref().map_or(0, |r| r.input_tokens),
-        "output_tokens": assessment.request.as_ref().map_or(0, |r| r.output_tokens),
+        "input_tokens": assessment.request.as_ref().map_or(0, |request| request.input_tokens),
+        "output_tokens": assessment.request.as_ref().map_or(0, |request| request.output_tokens),
     })
 }
 
 /// Errors and skips retain the requested lines when no validated candidate region is available.
-fn located(mut data: Value, lines: Option<LineRange>) -> Value {
-    if let Some(lines) = lines {
-        data["start_line"] = json!(lines.start);
-        data["end_line"] = json!(lines.end);
+fn attach_lines<Data>(data: Data, lines: Option<LineRange>) -> Extended<Value, Data> {
+    Extended {
+        added: lines.map_or_else(
+            || json!({}),
+            |range| json!({ "start_line": range.start, "end_line": range.end }),
+        ),
+        base: data,
     }
-    data
 }
 
 #[cfg(test)]

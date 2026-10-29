@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.8.0
+
+- Record credential rejections and rate-limit pushback before releasing an attempt's concurrency slot, so queued
+  requests and hedges cannot use that slot before the shared stop or pause takes effect.
+- Provider trace events use snake_case failure kinds, such as `credential_rejected` and `rate_limited`, matching
+  JSON error records. The trace schema version is 2; version 1 used Rust names for provider failures.
+- A candidate JSON line with a missing or mistyped field now names the field after
+  `expected candidate JSON with file, range, and text`, and an invalid `--min-confidence` names why the number did
+  not parse.
+- Error messages quote each value they name, such as `cannot read state "state.json"`, and end with the cause after
+  a colon.
+- Rust API: functions start with a verb. `Provider` has `list_supported_models`, `read_default_model`,
+  `read_endpoint`, `read_key_variable`, and `select_model`. `Input::load` is `Input::read`, `Candidate::bytes` is
+  `Candidate::count_bytes`, `Region::lines` is `Region::to_lines`, `ErrorKind::fatal` is `ErrorKind::is_fatal`, and
+  `FailureKind::retryable` is `FailureKind::is_retryable`. `Failure::kind` is `Failure::classify`, its `message` is
+  `format_message`, and `context_prompt_id` is `build_context_prompt_id`.
+- Rust API: `ev_grep_core::Error` is `ev_grep_core::InputError`, and `ev_grep_jev::Error` is `ev_grep_jev::JevError`.
+
 ## v0.7.0
 
 - Exit codes keep their meanings: 0 for a match, 1 for no match, 2 for an error, and 3 for uncertainty. A file over

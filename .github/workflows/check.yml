@@ -1,34 +1,47 @@
-name: Check
-on:
-  workflow_call:
-  push:
-  pull_request:
-permissions:
-  contents: read
-jobs:
-  rust:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - name: Verify release source
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag != 'dry-run' && github.event.inputs.tag != ''
-        env:
-          RELEASE_TAG: ${{ github.event.inputs.tag }}
-        run: |
+---
+"concurrency":
+  "cancel-in-progress": true
+  # A release calls this workflow too; its own workflow name keeps its run out of the push group.
+  "group": "${{ github.workflow }}-check-${{ github.ref }}"
+"jobs":
+  "rust":
+    "name": "Rust"
+    "runs-on": "ubuntu-latest"
+    "steps":
+      - "uses": "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803" # v6
+        "with":
+          "persist-credentials": false
+      - "env":
+          "RELEASE_TAG": "${{ github.event.inputs.tag }}"
+        "if": "github.event_name == 'workflow_dispatch' && github.event.inputs.tag != 'dry-run' && github.event.inputs.tag != ''"
+        "name": "Verify release source"
+        "run": |
           set -euo pipefail
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
-          test "$RELEASE_TAG" = "v$version"
-          test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - name: Install pinned Rust toolchain
-        run: rustup show active-toolchain
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
-      - name: Check
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: |
-          cargo fmt --all --check
+          test "${RELEASE_TAG}" = "v${version}"
+          test "${GITHUB_REF}" = "refs/tags/${RELEASE_TAG}"
+          head=$(git rev-parse HEAD)
+          test "${head}" = "${GITHUB_SHA}"
+      - "name": "Install pinned Rust toolchain"
+        "run": "rustup show active-toolchain"
+      # rustfmt.toml sets unstable options, so formatting runs on one pinned dated nightly with only rustfmt.
+      - "name": "Install pinned nightly rustfmt"
+        "run": "rustup toolchain install nightly-2026-10-27 --profile minimal --component rustfmt"
+      - "uses": "Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0" # v2.9.3
+      - "env":
+          "RUSTDOCFLAGS": "-D warnings"
+        "name": "Check"
+        "run": |
+          cargo +nightly-2026-10-27 fmt --all --check
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo test --workspace --locked
           cargo doc --workspace --no-deps --locked
+    "timeout-minutes": 10
+"name": "Check"
+"on":
+  "pull_request": {}
+  "push": {}
+  "workflow_call": {}
+"permissions":
+  "contents": "read"
+...

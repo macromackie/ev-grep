@@ -1,30 +1,73 @@
-use anyhow::{Context, Result};
+use alloc::collections::BTreeMap;
+use core::time::Duration;
+use std::net::TcpListener;
+
 use ev_grep_core::{
-    Candidate, Evaluator, Focus, LineRange, MAX_FILE_BYTES, Outcome, Region, Source,
-    SupportingSource, Uncertainty,
+    Candidate,
+    Evaluator as _,
+    Focus,
+    LineRange,
+    MAX_FILE_BYTES,
+    Outcome,
+    Region,
+    Source,
+    SupportingSource,
+    Uncertainty,
 };
-use serde_json::{Value, json};
-use std::time::Duration;
+use serde_json::{Map, Value, json, value::RawValue};
 use wiremock::{
-    Mock, MockServer, ResponseTemplate,
+    Mock,
+    MockServer,
+    ResponseTemplate,
     matchers::{method, path},
 };
 
-use crate::{Error, FailureKind, Jev, Provider, RequestError, protocol};
+use crate::{FailureKind, Jev, JevError, Provider, RequestError, protocol};
 
-fn response(model: &str) -> Value {
+fn build_response(model: &str) -> Value {
     json!({"model": model, "answers": {"match": {
-        "type": "choice", "choice": "match", "confidence": 0.95,
-        "probabilities": {"match": 0.98, "no_match": 0.01, "uncertain": 0.01}
-    }}, "usage": {"input_tokens": 100, "output_tokens": 5}})
+        "type": "choice", "choice": "match", "confidence": 0.95_f64,
+        "probabilities": {"match": 0.98_f64, "no_match": 0.01_f64, "uncertain": 0.01_f64}
+    }}, "usage": {"input_tokens": 100_u64, "output_tokens": 5_u64}})
 }
 
-#[tokio::test]
-async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> {
+/// The value at a JSON pointer, or null when it is missing, as `Value`'s index reads it.
+fn read_at<'value>(value: &'value Value, pointer: &str) -> &'value Value {
+    value.pointer(pointer).unwrap_or(&Value::Null)
+}
+
+fn set(value: &mut Value, pointer: &str, replacement: Value) {
+    *value.pointer_mut(pointer).unwrap() = replacement;
+}
+
+fn request_failure(error: &JevError) -> Option<&RequestError> {
+    if let JevError::Request(failure) = error {
+        Some(failure)
+    } else {
+        None
+    }
+}
+
+fn read_kind(error: &JevError) -> Option<FailureKind> {
+    request_failure(error).map(|failure| failure.kind)
+}
+
+fn build_cached_source() -> Candidate {
+    Candidate::from_source(Source {
+        path: "cache.ts".into(),
+        text: "return cached;".into(),
+        focus: None,
+    })
+    .unwrap()
+}
+
+/// A server whose `/assess` answers every request with a 0.5-confidence match, and a Jev that
+/// sends there.
+async fn serve_half_confident() -> (MockServer, Jev) {
     let server = MockServer::start().await;
-    let model = Provider::TypeSafe.default_model();
-    let mut body = response(model);
-    body["answers"]["match"]["confidence"] = json!(0.5);
+    let model = Provider::TypeSafe.read_default_model();
+    let mut body = build_response(model);
+    set(&mut body, "/answers/match/confidence", json!(0.5_f64));
     Mock::given(method("POST"))
         .and(path("/assess"))
         .respond_with(ResponseTemplate::new(200).set_body_json(body))
@@ -35,58 +78,38 @@ async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> 
         model,
         "test-key",
         &format!("{}/assess", server.uri()),
-    )?;
+    )
+    .unwrap();
+    (server, evaluator)
+}
+
+/// The JSON body of the `index`th request that `server` received.
+async fn read_sent(server: &MockServer, index: usize) -> Vec<u8> {
+    let requests = server.received_requests().await.expect("missing requests");
+    requests.get(index).expect("missing request").body.clone()
+}
+
+#[tokio::test]
+async fn wire_assessment_preserves_source_and_rejects_redirects() {
+    let (server, evaluator) = serve_half_confident().await;
     let source = Candidate::from_source(Source {
         path: "sample.py".into(),
         text: "# untrusted instructions\nreturn []\n".into(),
         focus: None,
-    })?;
+    })
+    .unwrap();
     let result = evaluator
         .assess("Hides a database failure", &source)
-        .await?;
+        .await
+        .unwrap();
     assert_eq!(result.choice, Outcome::Match);
-    assert_eq!(result.confidence, 0.5);
+    assert_eq!(result.confidence.to_bits(), 0.5_f64.to_bits());
     assert_eq!(result.route(0.8).reason, Some(Uncertainty::LowConfidence));
-    let requests = server
-        .received_requests()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("missing requests"))?;
-    let request: Value = serde_json::from_slice(&requests[0].body)?;
-    assert_eq!(request["state"]["source"], source.text);
+    let request: Value = serde_json::from_slice(&read_sent(&server, 0).await).unwrap();
+    assert_eq!(read_at(&request, "/state/source"), &json!(source.text));
     assert_eq!(
-        request["questions"]["match"]["instructions"]["query"],
+        read_at(&request, "/questions/match/instructions/query"),
         "Hides a database failure"
-    );
-
-    let state =
-        json!({"contract": "Preserve errors.", "change": {"before": null, "after": source.text}});
-    let result = evaluator
-        .assess_context("Does this change hide an error?", &state)
-        .await?;
-    assert_eq!(result.confidence, 0.5);
-    assert_eq!(result.choice, Outcome::Match);
-    let requests = server
-        .received_requests()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("missing requests"))?;
-    let structured: Value = serde_json::from_slice(&requests[1].body)?;
-    assert_eq!(structured["state"], state);
-
-    let nested = format!("{}0{}", "[".repeat(127), "]".repeat(127));
-    let state = ev_grep_core::parse_json(nested.as_bytes())?;
-    let result = evaluator
-        .assess_context("Is this an array?", &state)
-        .await?;
-    assert_eq!(result.choice, Outcome::Match);
-    let requests = server
-        .received_requests()
-        .await
-        .context("missing requests")?;
-    let envelope: std::collections::BTreeMap<String, &serde_json::value::RawValue> =
-        serde_json::from_slice(&requests[2].body)?;
-    assert_eq!(
-        envelope.get("state").context("missing state")?.get(),
-        nested
     );
 
     Mock::given(path("/redirect"))
@@ -99,157 +122,273 @@ async fn wire_assessment_preserves_source_and_rejects_redirects() -> Result<()> 
     let redirect = Jev::connect(
         Provider::TypeSafe,
         &format!("{}/redirect", server.uri()),
-        model,
+        Provider::TypeSafe.read_default_model(),
         "test-key",
-    )?;
-    assert!(redirect.assess("query", &source).await.is_err());
-    Ok(())
+    )
+    .unwrap();
+    let redirected = redirect
+        .assess("query", &source)
+        .await
+        .expect_err("expected the redirect to fail");
+    assert_eq!(
+        read_kind(&redirected),
+        Some(FailureKind::Rejected),
+        "{redirected:?}"
+    );
+}
+
+#[tokio::test]
+async fn context_assessment_sends_the_state_unchanged() {
+    let (server, evaluator) = serve_half_confident().await;
+    let state =
+        json!({"contract": "Preserve errors.", "change": {"before": null, "after": "return []"}});
+    let result = evaluator
+        .assess_context("Does this change hide an error?", &state)
+        .await
+        .unwrap();
+    assert_eq!(result.confidence.to_bits(), 0.5_f64.to_bits());
+    assert_eq!(result.choice, Outcome::Match);
+    let structured: Value = serde_json::from_slice(&read_sent(&server, 0).await).unwrap();
+    assert_eq!(read_at(&structured, "/state"), &state);
+
+    let nested = format!("{}0{}", "[".repeat(127), "]".repeat(127));
+    let array = ev_grep_core::parse_json(nested.as_bytes()).unwrap();
+    let answer = evaluator
+        .assess_context("Is this an array?", &array)
+        .await
+        .unwrap();
+    assert_eq!(answer.choice, Outcome::Match);
+    let body = read_sent(&server, 1).await;
+    let envelope: BTreeMap<String, &RawValue> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(envelope.get("state").expect("missing state").get(), nested);
 }
 
 #[test]
-fn embedded_prompt_fills_the_request_and_rejects_incomplete_fields() -> Result<()> {
-    let prompt = protocol::prompt()?;
+fn embedded_prompt_fills_the_request() {
+    let prompt = protocol::prompt().unwrap();
     let source = Candidate::from_source(Source {
         path: "retry.ts".into(),
         text: "retry()\n".into(),
         focus: None,
-    })?;
+    })
+    .unwrap();
     let request = protocol::request("fixture", &prompt, "Retries requests", &source);
     // A whole-file search sends only the path and source, with no focus rule.
-    assert_eq!(request["state"].as_object().map(|s| s.len()), Some(2));
-    let question = &request["questions"]["match"];
     assert_eq!(
-        question["instructions"].as_object().map(|i| i.len()),
+        read_at(&request, "/state").as_object().map(Map::len),
         Some(2)
     );
-    assert_eq!(question["instructions"]["task"], prompt.task);
-    assert_eq!(question["instructions"]["query"], "Retries requests");
-    assert_eq!(question["criteria"]["match"], prompt.criteria.matches);
-    assert_eq!(question["criteria"]["no_match"], prompt.criteria.no_match);
-    assert_eq!(question["criteria"]["uncertain"], prompt.criteria.uncertain);
-    assert_eq!(question["criteria"].as_object().map(|c| c.len()), Some(3));
-
-    for invalid in [
-        r#"{"supporting": "s", "task": "t", "focus": "f", "criteria": {"match": "m", "no_match": "n"}}"#,
-        r#"{"supporting": "s", "task": "t", "focus": "f", "criteria": {"match": "m", "no_match": "n", "uncertain": "u", "other": "o"}}"#,
-        r#"{"supporting": "s", "task": " ", "focus": "f", "criteria": {"match": "m", "no_match": "n", "uncertain": "u"}}"#,
-        r#"{"supporting": "s", "task": "t", "criteria": {"match": "m", "no_match": "n", "uncertain": "u"}}"#,
-    ] {
-        assert!(protocol::parse_prompt(invalid).is_err(), "{invalid}");
-    }
-    Ok(())
+    let question = read_at(&request, "/questions/match");
+    assert_eq!(
+        read_at(question, "/instructions").as_object().map(Map::len),
+        Some(2)
+    );
+    assert_eq!(read_at(question, "/instructions/task"), &json!(prompt.task));
+    assert_eq!(read_at(question, "/instructions/query"), "Retries requests");
+    assert_eq!(
+        read_at(question, "/criteria/match"),
+        &json!(prompt.criteria.matches)
+    );
+    assert_eq!(
+        read_at(question, "/criteria/no_match"),
+        &json!(prompt.criteria.no_match)
+    );
+    assert_eq!(
+        read_at(question, "/criteria/uncertain"),
+        &json!(prompt.criteria.uncertain)
+    );
+    assert_eq!(
+        read_at(question, "/criteria").as_object().map(Map::len),
+        Some(3)
+    );
 }
 
 #[test]
-fn ranged_request_sends_the_whole_file_and_the_focus_lines() -> Result<()> {
-    let prompt = protocol::prompt()?;
-    let mut source = Candidate::from_source(Source {
+fn incomplete_prompts_are_rejected() {
+    for invalid in [
+        concat!(
+            r#"{"supporting": "s", "task": "t", "focus": "f", "#,
+            r#""criteria": {"match": "m", "no_match": "n"}}"#,
+        ),
+        concat!(
+            r#"{"supporting": "s", "task": "t", "focus": "f", "#,
+            r#""criteria": {"match": "m", "no_match": "n", "uncertain": "u", "other": "o"}}"#,
+        ),
+        concat!(
+            r#"{"supporting": "s", "task": " ", "focus": "f", "#,
+            r#""criteria": {"match": "m", "no_match": "n", "uncertain": "u"}}"#,
+        ),
+        concat!(
+            r#"{"supporting": "s", "task": "t", "#,
+            r#""criteria": {"match": "m", "no_match": "n", "uncertain": "u"}}"#,
+        ),
+    ] {
+        assert!(
+            matches!(
+                protocol::parse_prompt(invalid),
+                Err(JevError::Prompt(_) | JevError::EmptyPrompt)
+            ),
+            "{invalid:?}"
+        );
+    }
+}
+
+/// `users.py` with its `save` function in focus.
+fn build_users_source() -> Candidate {
+    Candidate::from_source(Source {
         path: "users.py".into(),
         text: "import db\n\ndef save(user):\n    db.insert(user)\n".into(),
         focus: Some(Focus {
-            lines: LineRange { start: 3, end: 4 },
+            lines: LineRange { end: 4, start: 3 },
             text: "def save(user):\n    db.insert(user)\n".into(),
         }),
-    })?;
-    let request = protocol::request("fixture", &prompt, "Writes to the database", &source);
-    assert_eq!(
-        request["state"]["source"].as_str(),
-        source.context.as_deref()
-    );
-    assert_eq!(request["state"]["focus"]["start_line"], 3);
-    assert_eq!(request["state"]["focus"]["end_line"], 4);
-    assert_eq!(
-        request["state"]["focus"]["text"],
-        "def save(user):\n    db.insert(user)\n"
-    );
-    assert_eq!(
-        request["questions"]["match"]["instructions"]["focus"],
-        prompt.focus
-    );
-    source
-        .supporting
-        .push(SupportingSource::from_source(Source {
-            path: "db.py".into(),
-            text: "unrelated()\ndef insert(user): write(user)\n".into(),
-            focus: Some(Focus {
-                lines: LineRange { start: 2, end: 2 },
-                text: "def insert(user): write(user)\n".into(),
-            }),
-        })?);
-    let supported = protocol::request("fixture", &prompt, "Writes to the database", &source);
-    assert_eq!(supported["state"]["focus"], request["state"]["focus"]);
-    assert_eq!(supported["state"]["source"], request["state"]["source"]);
-    assert_eq!(
-        supported["state"]["supporting"][0]["text"],
-        "def insert(user): write(user)\n"
-    );
-    assert_eq!(
-        supported["state"]["supporting"][0]["range"]["start"]["line"],
-        1
-    );
-    assert_eq!(
-        supported["questions"]["match"]["instructions"]["supporting"],
-        prompt.supporting
-    );
-    Ok(())
+    })
+    .unwrap()
 }
 
 #[test]
-fn uncertainty_and_invalid_protocol_cannot_become_confident_matches() -> Result<()> {
-    let model = Provider::TypeSafe.default_model();
-    let mut body = response(model);
-    body["answers"]["match"]["confidence"] = json!(0.5);
-    let raw =
-        protocol::assessment(&serde_json::to_vec(&body)?, model, &["match"])?.into_single()?;
+fn ranged_request_sends_the_whole_file_and_the_focus_lines() {
+    let prompt = protocol::prompt().unwrap();
+    let source = build_users_source();
+    let request = protocol::request("fixture", &prompt, "Writes to the database", &source);
+    assert_eq!(
+        read_at(&request, "/state/source").as_str(),
+        source.context.as_deref()
+    );
+    assert_eq!(read_at(&request, "/state/focus/start_line"), 3_u64);
+    assert_eq!(read_at(&request, "/state/focus/end_line"), 4_u64);
+    assert_eq!(
+        read_at(&request, "/state/focus/text"),
+        "def save(user):\n    db.insert(user)\n"
+    );
+    assert_eq!(
+        read_at(&request, "/questions/match/instructions/focus"),
+        &json!(prompt.focus)
+    );
+}
+
+#[test]
+fn supporting_sources_join_the_ranged_request() {
+    let prompt = protocol::prompt().unwrap();
+    let mut source = build_users_source();
+    let request = protocol::request("fixture", &prompt, "Writes to the database", &source);
+    source.supporting.push(
+        SupportingSource::from_source(Source {
+            path: "db.py".into(),
+            text: "unrelated()\ndef insert(user): write(user)\n".into(),
+            focus: Some(Focus {
+                lines: LineRange { end: 2, start: 2 },
+                text: "def insert(user): write(user)\n".into(),
+            }),
+        })
+        .unwrap(),
+    );
+    let supported = protocol::request("fixture", &prompt, "Writes to the database", &source);
+    assert_eq!(
+        read_at(&supported, "/state/focus"),
+        read_at(&request, "/state/focus")
+    );
+    assert_eq!(
+        read_at(&supported, "/state/source"),
+        read_at(&request, "/state/source")
+    );
+    assert_eq!(
+        read_at(&supported, "/state/supporting/0/text"),
+        "def insert(user): write(user)\n"
+    );
+    assert_eq!(
+        read_at(&supported, "/state/supporting/0/range/start/line"),
+        1_u64
+    );
+    assert_eq!(
+        read_at(&supported, "/questions/match/instructions/supporting"),
+        &json!(prompt.supporting)
+    );
+}
+
+#[test]
+fn uncertainty_and_invalid_protocol_cannot_become_confident_matches() {
+    let model = Provider::TypeSafe.read_default_model();
+    let mut body = build_response(model);
+    set(&mut body, "/answers/match/confidence", json!(0.5_f64));
+    let raw = protocol::parse_assessment(&serde_json::to_vec(&body).unwrap(), model, &["match"])
+        .unwrap()
+        .into_single()
+        .unwrap();
     assert_eq!(raw.choice, Outcome::Match);
-    let result = raw.route(0.8);
-    assert_eq!(result.outcome, Outcome::Uncertain);
+    let routed = raw.route(0.8);
+    assert_eq!(routed.outcome, Outcome::Uncertain);
     assert_eq!(raw.choice, Outcome::Match);
-    assert_eq!(result.reason, Some(Uncertainty::LowConfidence));
+    assert_eq!(routed.reason, Some(Uncertainty::LowConfidence));
     assert_eq!(raw.route(0.5).outcome, Outcome::Match);
 
-    body["answers"]["match"]["choice"] = json!("uncertain");
-    body["answers"]["match"]["probabilities"] =
-        json!({"match":0.01,"no_match":0.01,"uncertain":0.98});
+    set(&mut body, "/answers/match/choice", json!("uncertain"));
+    set(
+        &mut body,
+        "/answers/match/probabilities",
+        json!({"match":0.01_f64,"no_match":0.01_f64,"uncertain":0.98_f64}),
+    );
     assert_eq!(
-        protocol::assessment(&serde_json::to_vec(&body)?, model, &["match"])?
-            .into_single()?
+        protocol::parse_assessment(&serde_json::to_vec(&body).unwrap(), model, &["match"])
+            .unwrap()
+            .into_single()
+            .unwrap()
             .route(0.0)
             .outcome,
         Outcome::Uncertain
     );
+}
 
-    for mutation in ["model", "labels", "sum", "choice", "missing"] {
-        let mut body = response(model);
-        match mutation {
-            "model" => body["model"] = json!("another-model"),
-            "labels" => {
-                body["answers"]["match"]["probabilities"]["other"] = json!(0.0);
-            }
-            "sum" => body["answers"]["match"]["probabilities"]["match"] = json!(0.3),
-            "choice" => body["answers"]["match"]["choice"] = json!("no_match"),
-            _ => body["answers"] = json!({}),
-        }
+#[test]
+fn invalid_answers_and_unsupported_models_are_rejected() {
+    let model = Provider::TypeSafe.read_default_model();
+    for (pointer, replacement) in [
+        ("/model", json!("another-model")),
+        (
+            "/answers/match/probabilities",
+            json!({"match":0.98_f64,"no_match":0.01_f64,"uncertain":0.01_f64,"other":0.0_f64}),
+        ),
+        ("/answers/match/probabilities/match", json!(0.3_f64)),
+        ("/answers/match/choice", json!("no_match")),
+        ("/answers", json!({})),
+    ] {
+        let mut body = build_response(model);
+        set(&mut body, pointer, replacement);
         assert!(
-            protocol::assessment(&serde_json::to_vec(&body)?, model, &["match"]).is_err(),
-            "{mutation}"
+            matches!(
+                protocol::parse_assessment(&serde_json::to_vec(&body).unwrap(), model, &["match"]),
+                Err(RequestError {
+                    kind: FailureKind::InvalidResponse | FailureKind::ModelMismatch,
+                    ..
+                })
+            ),
+            "{pointer:?}"
         );
     }
     for provider in [Provider::OpenRouter, Provider::TypeSafe] {
-        assert!(provider.model(Some("jev-latest")).is_err());
-        assert!(provider.model(Some(provider.default_model())).is_ok());
+        assert!(matches!(
+            provider.select_model(Some("jev-latest")),
+            Err(JevError::UnsupportedModel { .. })
+        ));
         assert_eq!(
-            protocol::assessment(
-                &serde_json::to_vec(&response(provider.default_model()))?,
-                provider.default_model(),
+            provider
+                .select_model(Some(provider.read_default_model()))
+                .unwrap(),
+            provider.read_default_model()
+        );
+        assert_eq!(
+            protocol::parse_assessment(
+                &serde_json::to_vec(&build_response(provider.read_default_model())).unwrap(),
+                provider.read_default_model(),
                 &["match"]
-            )?
-            .into_single()?
+            )
+            .unwrap()
+            .into_single()
+            .unwrap()
             .model,
-            provider.default_model()
+            provider.read_default_model()
         );
     }
-    Ok(())
 }
 
 #[test]
@@ -259,58 +398,54 @@ fn endpoint_rejects_non_http_or_credential_bearing_urls() {
         "https://example.com/jev?key=secret",
         "file:///secret",
     ] {
-        assert!(
+        assert!(matches!(
             Jev::with_endpoint(
                 Provider::TypeSafe,
-                Provider::TypeSafe.default_model(),
+                Provider::TypeSafe.read_default_model(),
                 "key",
                 endpoint
-            )
-            .is_err()
-        );
+            ),
+            Err(JevError::UnsupportedEndpoint)
+        ));
     }
 }
 
-#[tokio::test]
-async fn transient_failures_recover_but_retries_are_bounded() -> Result<()> {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+/// A Jev for `OpenRouter`'s default model that sends to `route` on `server`.
+fn build_openrouter(server: &MockServer, route: &str) -> Jev {
+    Jev::connect(
+        Provider::OpenRouter,
+        &format!("{}{route}", server.uri()),
+        Provider::OpenRouter.read_default_model(),
+        "test-key",
+    )
+    .unwrap()
+}
 
+#[tokio::test]
+async fn a_transient_failure_is_retried() {
     let server = MockServer::start().await;
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let seen = attempts.clone();
-    let model = Provider::OpenRouter.default_model();
+    let model = Provider::OpenRouter.read_default_model();
     Mock::given(path("/recover"))
-        .respond_with(move |_: &wiremock::Request| {
-            if seen.fetch_add(1, Ordering::SeqCst) == 0 {
-                ResponseTemplate::new(520).insert_header("Retry-After", "0")
-            } else {
-                ResponseTemplate::new(200).set_body_json(response(model))
-            }
-        })
+        .respond_with(ResponseTemplate::new(520).insert_header("Retry-After", "0"))
+        .up_to_n_times(1)
+        .with_priority(1)
         .mount(&server)
         .await;
-    let source = Candidate::from_source(Source {
-        path: "cache.ts".into(),
-        text: "return cached;".into(),
-        focus: None,
-    })?;
-    let recovering = Jev::connect(
-        Provider::OpenRouter,
-        &format!("{}/recover", server.uri()),
-        model,
-        "test-key",
-    )?;
-    assert_eq!(
-        recovering
-            .assess("Returns cached values", &source)
-            .await?
-            .choice,
-        Outcome::Match
-    );
+    Mock::given(path("/recover"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(build_response(model)))
+        .mount(&server)
+        .await;
+    let recovering = build_openrouter(&server, "/recover");
+    let answer = recovering
+        .assess("Returns cached values", &build_cached_source())
+        .await
+        .unwrap();
+    assert_eq!(answer.choice, Outcome::Match);
+}
 
+#[tokio::test]
+async fn retries_are_bounded_and_keep_only_safe_details() {
+    let server = MockServer::start().await;
     Mock::given(path("/down"))
         .respond_with(
             ResponseTemplate::new(520)
@@ -321,243 +456,197 @@ async fn transient_failures_recover_but_retries_are_bounded() -> Result<()> {
         .expect(3)
         .mount(&server)
         .await;
-    let down = Jev::connect(
-        Provider::OpenRouter,
-        &format!("{}/down", server.uri()),
-        model,
-        "test-key",
-    )?;
-    let error = down
-        .assess("Returns cached values", &source)
+    let message = build_openrouter(&server, "/down")
+        .assess("Returns cached values", &build_cached_source())
         .await
-        .err()
-        .context("expected failure")?
+        .expect_err("expected failure")
         .to_string();
-    assert!(error.contains("520") && error.contains("cf-ray=example-SJC"));
-    assert!(!error.contains("private provider response"));
+    assert!(message.contains("520") && message.contains("cf-ray=example-SJC"));
+    assert!(!message.contains("private provider response"));
+    server.verify().await;
+}
 
+#[tokio::test]
+async fn a_rejected_credential_stops_later_requests() {
+    let server = MockServer::start().await;
     Mock::given(path("/unauthorized"))
         .respond_with(ResponseTemplate::new(401))
         .expect(1)
         .mount(&server)
         .await;
     // A rejected credential is sent once, and no later request that shares it starts.
-    let unauthorized = Jev::connect(
-        Provider::OpenRouter,
-        &format!("{}/unauthorized", server.uri()),
-        model,
-        "test-key",
-    )?;
-    for _ in 0..2 {
-        let error = unauthorized
+    let unauthorized = build_openrouter(&server, "/unauthorized");
+    let source = build_cached_source();
+    for _ in 0_u8..2 {
+        let rejected = unauthorized
             .assess("query", &source)
             .await
-            .err()
-            .context("expected a rejected credential")?;
-        assert!(
-            matches!(
-                &error,
-                Error::Request(RequestError {
-                    kind: FailureKind::CredentialRejected,
-                    ..
-                })
-            ),
-            "{error}"
+            .expect_err("expected a rejected credential");
+        assert_eq!(
+            read_kind(&rejected),
+            Some(FailureKind::CredentialRejected),
+            "{rejected:?}"
         );
     }
+    server.verify().await;
+}
 
+#[tokio::test]
+async fn a_model_mismatch_is_not_retried() {
+    let server = MockServer::start().await;
     // Every attempt would reach the same renamed model, so a mismatch is sent once.
     let renamed = "typesafe/jev-1.14-20261101";
     Mock::given(path("/renamed"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(response(renamed)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(build_response(renamed)))
         .expect(1)
         .mount(&server)
         .await;
-    let error = Jev::connect(
-        Provider::OpenRouter,
-        &format!("{}/renamed", server.uri()),
-        model,
-        "test-key",
-    )?
-    .assess("query", &source)
-    .await
-    .err()
-    .context("expected a model mismatch")?;
-    let Error::Request(failure) = &error else {
-        anyhow::bail!("expected a request error: {error}");
-    };
+    let mismatch = build_openrouter(&server, "/renamed")
+        .assess("query", &build_cached_source())
+        .await
+        .expect_err("expected a model mismatch");
+    let failure = request_failure(&mismatch).expect("expected a request error");
     assert_eq!(failure.kind, FailureKind::ModelMismatch);
-    assert!(!failure.kind.retryable());
-    let message = error.to_string();
+    assert!(!failure.kind.is_retryable());
+    let message = mismatch.to_string();
     assert!(
-        message.contains(renamed) && message.contains(model),
-        "{message}"
+        message.contains(renamed) && message.contains(Provider::OpenRouter.read_default_model()),
+        "{message:?}"
     );
+    server.verify().await;
+}
 
+#[tokio::test]
+async fn moderation_keeps_only_reason_codes() {
+    let server = MockServer::start().await;
     // A moderation 403 keeps its reason codes, never the flagged input or message.
     Mock::given(path("/moderated"))
         .respond_with(ResponseTemplate::new(403).set_body_json(json!({"error": {
-            "code": 403, "message": "private provider message",
-            "metadata": {"reasons": ["violence", "private reason text"], "flagged_input": "private source"}
+            "code": 403_u64, "message": "private provider message",
+            "metadata": {
+                "reasons": ["violence", "private reason text"],
+                "flagged_input": "private source"
+            }
         }})))
         .expect(1)
         .mount(&server)
         .await;
-    let error = Jev::connect(
-        Provider::OpenRouter,
-        &format!("{}/moderated", server.uri()),
-        model,
-        "test-key",
-    )?
-    .assess("query", &source)
-    .await
-    .err()
-    .context("expected a moderation error")?;
-    let Error::Request(failure) = &error else {
-        anyhow::bail!("expected a request error: {error}");
-    };
+    let moderated = build_openrouter(&server, "/moderated")
+        .assess("query", &build_cached_source())
+        .await
+        .expect_err("expected a moderation error");
+    let failure = request_failure(&moderated).expect("expected a request error");
     assert_eq!(failure.kind, FailureKind::Moderation);
     assert_eq!(failure.moderation, Some(vec!["violence".to_owned()]));
-    assert!(!format!("{error:?}").contains("private"));
+    assert!(!format!("{moderated:?}").contains("private"));
     server.verify().await;
-    Ok(())
 }
 
 #[tokio::test]
-async fn transport_failures_name_their_cause() -> Result<()> {
-    let model = Provider::TypeSafe.default_model();
-    let source = Candidate::from_source(Source {
-        path: "cache.ts".into(),
-        text: "return cached;".into(),
-        focus: None,
-    })?;
-    let unused = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
-    let error = Jev::connect(
+async fn transport_failures_name_their_cause() {
+    let model = Provider::TypeSafe.read_default_model();
+    let source = build_cached_source();
+    let unused = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let refused = Jev::connect(
         Provider::TypeSafe,
         &format!("http://{unused}/jev"),
         model,
         "test-key",
-    )?
+    )
+    .unwrap()
     .assess("query", &source)
     .await
-    .err()
-    .context("expected a refused connection")?;
-    assert!(
-        matches!(
-            &error,
-            Error::Request(RequestError {
-                kind: FailureKind::Connect,
-                ..
-            })
-        ),
-        "{error}"
+    .expect_err("expected a refused connection");
+    assert_eq!(
+        read_kind(&refused),
+        Some(FailureKind::Connect),
+        "{refused:?}"
     );
     assert!(
-        error
+        refused
             .to_string()
             .starts_with("Jev transport failed (connect): "),
-        "{error}"
+        "{refused:?}"
     );
 
     // A plain HTTP server answers the TLS handshake with bytes that are not TLS.
     let server = MockServer::start().await;
-    let error = Jev::connect(
+    let handshake = Jev::connect(
         Provider::TypeSafe,
         &server.uri().replace("http://", "https://"),
         model,
         "test-key",
-    )?
+    )
+    .unwrap()
     .assess("query", &source)
     .await
-    .err()
-    .context("expected a TLS failure")?;
-    assert!(
-        matches!(
-            &error,
-            Error::Request(RequestError {
-                kind: FailureKind::Tls,
-                ..
-            })
-        ),
-        "{error}"
+    .expect_err("expected a TLS failure");
+    assert_eq!(
+        read_kind(&handshake),
+        Some(FailureKind::Tls),
+        "{handshake:?}"
     );
     assert!(
-        error
+        handshake
             .to_string()
             .starts_with("Jev transport failed (tls): "),
-        "{error}"
+        "{handshake:?}"
     );
-    Ok(())
 }
 
-/// Paused time reaches every attempt timeout before the provider's delayed answer, which arrives in real time.
+/// Paused time reaches every attempt timeout before the provider's delayed answer, which arrives in
+/// real time.
 #[tokio::test(start_paused = true)]
-async fn timeouts_are_typed_for_attempts_and_the_request_budget() -> Result<()> {
-    let model = Provider::TypeSafe.default_model();
-    let source = Candidate::from_source(Source {
-        path: "cache.ts".into(),
-        text: "return cached;".into(),
-        focus: None,
-    })?;
+async fn timeouts_are_typed_for_attempts_and_the_request_budget() {
+    let model = Provider::TypeSafe.read_default_model();
+    let source = build_cached_source();
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(response(model))
+                .set_body_json(build_response(model))
                 .set_delay(Duration::from_secs(30)),
         )
         .mount(&server)
         .await;
+    let slow = Jev::connect(Provider::TypeSafe, &server.uri(), model, "test-key").unwrap();
     // With a hedge, the third attempt starts at 6 seconds and times out within the budget.
-    let error = Jev::connect(Provider::TypeSafe, &server.uri(), model, "test-key")?
+    let attempt = slow
         .assess("query", &source)
         .await
-        .err()
-        .context("expected an attempt timeout")?;
-    assert!(
-        matches!(
-            &error,
-            Error::Request(RequestError {
-                kind: FailureKind::Timeout,
-                ..
-            })
-        ),
-        "{error}"
+        .expect_err("expected an attempt timeout");
+    assert_eq!(
+        read_kind(&attempt),
+        Some(FailureKind::Timeout),
+        "{attempt:?}"
     );
     assert!(
-        error
+        attempt
             .to_string()
             .starts_with("Jev transport failed (timeout): "),
-        "{error}"
+        "{attempt:?}"
     );
     // One slot runs the three attempts in sequence, so the 15-second budget ends the third.
-    let error = Jev::connect(Provider::TypeSafe, &server.uri(), model, "test-key")?
-        .with_jobs(1)?
+    let budget = slow
+        .with_jobs(1)
+        .unwrap()
         .assess("query", &source)
         .await
-        .err()
-        .context("expected the budget to expire")?;
+        .expect_err("expected the budget to expire");
+    assert_eq!(read_kind(&budget), Some(FailureKind::Timeout), "{budget:?}");
     assert!(
-        matches!(
-            &error,
-            Error::Request(RequestError {
-                kind: FailureKind::Timeout,
-                ..
-            })
-        ),
-        "{error}"
-    );
-    assert!(
-        error
+        budget
             .to_string()
             .contains("timed out after its 15-second budget"),
-        "{error}"
+        "{budget:?}"
     );
-    Ok(())
 }
 
-#[tokio::test]
-async fn oversized_or_ambiguous_inputs_make_no_paid_request() -> Result<()> {
+/// A Jev whose provider fails the test if any request reaches it.
+async fn serve_unreachable_provider() -> (MockServer, Jev) {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(500))
@@ -566,56 +655,69 @@ async fn oversized_or_ambiguous_inputs_make_no_paid_request() -> Result<()> {
         .await;
     let evaluator = Jev::with_endpoint(
         Provider::TypeSafe,
-        Provider::TypeSafe.default_model(),
+        Provider::TypeSafe.read_default_model(),
         "test-key",
         &server.uri(),
-    )?;
-    let mut candidate = Candidate::from_source(Source {
+    )
+    .unwrap();
+    (server, evaluator)
+}
+
+fn build_target() -> Candidate {
+    Candidate::from_source(Source {
         path: "target.py".into(),
         text: "save()".into(),
         focus: None,
-    })?;
+    })
+    .unwrap()
+}
+
+#[tokio::test]
+async fn reserved_json_keys_make_no_paid_request() {
+    let (server, evaluator) = serve_unreachable_provider().await;
+    let mut candidate = build_target();
     for key in [
         "$serde_json::private::Number",
         "$serde_json::private::RawValue",
     ] {
         let state = json!({"nested":[{key:"123"}]});
-        let error = evaluator
+        let in_state = evaluator
             .assess_context("query", &state)
             .await
-            .err()
-            .context("expected reserved state key error")?;
-        assert!(error.to_string().contains("reserved JSON object key"));
+            .expect_err("expected reserved state key error");
+        assert!(in_state.to_string().contains("reserved JSON object key"));
         candidate.meta_variables = Some(state);
-        let error = evaluator
+        let in_metadata = evaluator
             .assess("query", &candidate)
             .await
-            .err()
-            .context("expected reserved metadata key error")?;
-        assert!(error.to_string().contains("reserved JSON object key"));
+            .expect_err("expected reserved metadata key error");
+        assert!(in_metadata.to_string().contains("reserved JSON object key"));
     }
-    candidate.meta_variables = None;
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn oversized_inputs_make_no_paid_request() {
+    let (server, evaluator) = serve_unreachable_provider().await;
+    let mut candidate = build_target();
     let text = "x".repeat(MAX_FILE_BYTES);
     candidate.supporting.push(SupportingSource {
         file: "not-on-disk.py".into(),
-        range: Region::from_offsets(&text, 0..text.len())?,
+        range: Region::from_offsets(&text, 0..text.len()).unwrap(),
         text,
     });
-    let error = evaluator
+    let source_limit = evaluator
         .assess("query", &candidate)
         .await
-        .err()
-        .context("expected source limit")?;
-    assert!(error.to_string().contains("65536"));
+        .expect_err("expected source limit");
+    assert!(source_limit.to_string().contains("65536"));
     candidate.supporting.clear();
     candidate.text = "\t".repeat(MAX_FILE_BYTES);
-    candidate.range = Region::from_offsets(&candidate.text, 0..candidate.text.len())?;
-    let error = evaluator
+    candidate.range = Region::from_offsets(&candidate.text, 0..candidate.text.len()).unwrap();
+    let encoded_limit = evaluator
         .assess("query", &candidate)
         .await
-        .err()
-        .context("expected encoded limit")?;
-    assert!(error.to_string().contains("98304"));
+        .expect_err("expected encoded limit");
+    assert!(encoded_limit.to_string().contains("98304"));
     server.verify().await;
-    Ok(())
 }

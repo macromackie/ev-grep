@@ -7,21 +7,21 @@ Rust 1.98.0, `cargo build --release --locked`, default release profile with thin
 
 No model requests. Thirty measured runs after five warmups per case.
 
-| Operation | Median | Range |
-| --- | --- | --- |
-| Startup (`--version`) | 3.2 ms | 2.7–4.1 ms |
-| 100 files (`--dry-run`) | 7.0 ms | 6.1–9.7 ms |
+| Operation                | Median  | Range        |
+| ------------------------ | ------- | ------------ |
+| Startup (`--version`)    | 3.2 ms  | 2.7–4.1 ms   |
+| 100 files (`--dry-run`)  | 7.0 ms  | 6.1–9.7 ms   |
 | 1000 files (`--dry-run`) | 30.1 ms | 27.6–35.6 ms |
 
 ## Live search
 
 OpenRouter, `typesafe/jev-1.13-20260917`, up to four concurrent requests. Five measured runs after one warmup per case.
 
-| Files | Median | Range |
-| --- | --- | --- |
-| 1 | 220 ms | 204–232 ms |
-| 4 | 256 ms | 210–279 ms |
-| 16 | 690 ms | 616–1065 ms |
+| Files | Median | Range       |
+| ----- | ------ | ----------- |
+| 1     | 220 ms | 204–232 ms  |
+| 4     | 256 ms | 210–279 ms  |
+| 16    | 690 ms | 616–1065 ms |
 
 Times include startup, file reads, network requests, model responses, and captured JSONL output. All measured
 searches completed without execution errors; all 105 measured file assessments returned `uncertain`. These are elapsed

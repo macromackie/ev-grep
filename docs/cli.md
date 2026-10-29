@@ -137,7 +137,18 @@ Add `supporting` to supply other source text directly. Each entry has a `file` l
 uses the same coordinates as the candidate. For example:
 
 ```json
-{"file":"src/client.py","range":{"start":{"line":19,"column":0},"end":{"line":20,"column":0}},"text":"    return fetch()\n","supporting":[{"file":"src/db.py","range":{"start":{"line":9,"column":0},"end":{"line":10,"column":0}},"text":"def fetch(): return []\n"}]}
+{
+  "file": "src/client.py",
+  "range": { "start": { "line": 19, "column": 0 }, "end": { "line": 20, "column": 0 } },
+  "text": "    return fetch()\n",
+  "supporting": [
+    {
+      "file": "src/db.py",
+      "range": { "start": { "line": 9, "column": 0 }, "end": { "line": 10, "column": 0 } },
+      "text": "def fetch(): return []\n"
+    }
+  ]
+}
 ```
 
 `supporting` defaults to an empty list and is omitted from output when empty. Its file labels are never opened.
@@ -207,28 +218,28 @@ ev-grep [OPTIONS] <QUERY> [PATHS]...
 ev-grep [OPTIONS] --query-file <FILE> [PATHS]...
 ```
 
-| Option | Meaning |
-| --- | --- |
-| `-f, --query-file FILE` | Read one query from a file; `-` reads stdin |
-| `--stdin` | Assess stdin as one text candidate |
-| `--candidates FILE` | Read candidate JSON Lines; `-` reads stdin |
-| `--state FILE` | Assess one JSON value; `-` reads stdin |
-| `--context PATH[:N-M]` | Attach a supporting file or line range to every candidate; repeat to add sources |
-| `-g, --glob GLOB` | Filter paths; repeat to add filters, prefix with `!` to exclude |
-| `--provider PROVIDER` | `openrouter` (default) or `typesafe` |
-| `--model MODEL` | A supported pinned model for the selected provider |
-| `--unvalidated-model` | Send `--model` even when the [supported-model table](./providers.md#models) omits it |
-| `-j, --jobs N` | Maximum concurrent requests (default 4) |
-| `--min-confidence N` | Route answers below N to uncertain; 0 to 1 (default 0.8) |
-| `--sort ORDER` | `none` streams results (default); `score` sorts by descending match probability |
-| `--json` | Write versioned JSON Lines to stdout |
-| `--dry-run` | Inspect selected input without credentials or API requests |
-| `--strict` | Exit 2 when a file is skipped for exceeding 64 KiB |
-| `--max-candidates N` | Fail before any request when more than N inputs are selected |
-| `--trace PATH` | Write a JSON Lines trace to PATH; `-` writes stderr |
-| `--trace-environment ENV` | `local`, `ci`, or `release` in the trace's first record |
-| `-h, --help` | Show usage |
-| `-V, --version` | Show the executable version |
+| Option                    | Meaning                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------ |
+| `-f, --query-file FILE`   | Read one query from a file; `-` reads stdin                                          |
+| `--stdin`                 | Assess stdin as one text candidate                                                   |
+| `--candidates FILE`       | Read candidate JSON Lines; `-` reads stdin                                           |
+| `--state FILE`            | Assess one JSON value; `-` reads stdin                                               |
+| `--context PATH[:N-M]`    | Attach a supporting file or line range to every candidate; repeat to add sources     |
+| `-g, --glob GLOB`         | Filter paths; repeat to add filters, prefix with `!` to exclude                      |
+| `--provider PROVIDER`     | `openrouter` (default) or `typesafe`                                                 |
+| `--model MODEL`           | A supported pinned model for the selected provider                                   |
+| `--unvalidated-model`     | Send `--model` even when the [supported-model table](./providers.md#models) omits it |
+| `-j, --jobs N`            | Maximum concurrent requests (default 4)                                              |
+| `--min-confidence N`      | Route answers below N to uncertain; 0 to 1 (default 0.8)                             |
+| `--sort ORDER`            | `none` streams results (default); `score` sorts by descending match probability      |
+| `--json`                  | Write versioned JSON Lines to stdout                                                 |
+| `--dry-run`               | Inspect selected input without credentials or API requests                           |
+| `--strict`                | Exit 2 when a file is skipped for exceeding 64 KiB                                   |
+| `--max-candidates N`      | Fail before any request when more than N inputs are selected                         |
+| `--trace PATH`            | Write a JSON Lines trace to PATH; `-` writes stderr                                  |
+| `--trace-environment ENV` | `local`, `ci`, or `release` in the trace's first record                              |
+| `-h, --help`              | Show usage                                                                           |
+| `-V, --version`           | Show the executable version                                                          |
 
 Empty queries fail. Directory searches do not follow symbolic links; they report each one as a `symlink` skip. Explicit symlinks and special files are errors.
 Paths and text must be valid UTF-8. Files containing NUL bytes are skipped as binary, and files over 64 KiB as
