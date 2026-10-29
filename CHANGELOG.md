@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.1
+
+- The release workflow regenerates exactly from its configuration, including pinned action versions and comments.
+  Version 0.8.0 stopped before artifact creation because that check failed; this release includes its changes.
+
 ## v0.8.0
 
 - Record credential rejections and rate-limit pushback before releasing an attempt's concurrency slot, so queued

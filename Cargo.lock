@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "ev-grep"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "ev-grep-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "futures-util",
  "ignore",
@@ -371,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "ev-grep-jev"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "ev-grep-core",
  "fastrand",
