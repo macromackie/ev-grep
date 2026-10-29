@@ -24,6 +24,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: artifacts-build-local-*
@@ -49,3 +52,7 @@ jobs:
           printf 'fn main() {}\n' > sample.rs
           "$binary" 'contains a main function' sample.rs --dry-run --json > output.jsonl
           jq -s -e '[.[] | select(.type == "selected")] | length == 1' output.jsonl
+      - name: Search through local fake providers
+        env:
+          TARGET: ${{ matrix.target }}
+        run: mise-tasks/release/smoke "unpacked/ev-grep-$TARGET/ev-grep"
