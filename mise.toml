@@ -1,0 +1,55 @@
+monorepo_root = true
+
+[tools]
+"aqua:EmbarkStudios/cargo-deny" = "0.19.9"
+"github:bnjbvr/cargo-machete" = "0.9.1"
+python = "3.14.7"
+uv = "0.12.9"
+
+[monorepo]
+config_roots = ["crates/*"]
+
+[settings]
+idiomatic_version_file_enable_tools = ["rust"]
+
+[tasks.test]
+run = "cargo test --workspace --locked"
+
+[tasks.lint]
+run = "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+
+[tasks.typecheck]
+run = "cargo check --workspace --all-targets --locked"
+
+[tasks.fmt]
+run = "cargo +nightly-2026-10-27 fmt --all"
+
+[tasks."fmt:check"]
+run = "cargo +nightly-2026-10-27 fmt --all --check"
+
+[tasks.build]
+run = "cargo build --release --locked -p ev-grep"
+
+[task_templates."rust:test"]
+dir = "{{ config_root }}"
+run = "cargo test --package {{ config_root | basename }} --locked"
+
+[task_templates."rust:lint"]
+dir = "{{ config_root }}"
+run = "cargo clippy --package {{ config_root | basename }} --all-targets --all-features --locked -- -D warnings"
+
+[task_templates."rust:typecheck"]
+dir = "{{ config_root }}"
+run = "cargo check --package {{ config_root | basename }} --all-targets --locked"
+
+[task_templates."rust:fmt"]
+dir = "{{ config_root }}"
+run = "cargo +nightly-2026-10-27 fmt --package {{ config_root | basename }}"
+
+[task_templates."rust:fmt:check"]
+dir = "{{ config_root }}"
+run = "cargo +nightly-2026-10-27 fmt --package {{ config_root | basename }} --check"
+
+[task_templates."rust:check"]
+dir = "{{ config_root }}"
+run = ["mise run fmt:check", "mise run lint", "mise run test"]

@@ -14,7 +14,7 @@ The installer puts `ev-grep` in `~/.local/bin`. Add that directory to your `PATH
 You can also install a specific release with [mise](https://mise.jdx.dev/):
 
 ```sh
-mise use -g github:macromackie/ev-grep@0.8.1
+mise use -g github:macromackie/ev-grep@0.8.2
 ```
 
 Archives and checksums are on the [releases page](https://github.com/macromackie/ev-grep/releases).
@@ -108,5 +108,15 @@ cargo install --path crates/ev-grep --locked
 ```
 
 The toolchain file selects the Rust version. The build produces `target/release/ev-grep`; installation is optional.
+
+[package-boundaries.json](package-boundaries.json) declares the search, provider, and CLI crates and their allowed dependencies.
+Check that Cargo policy with the released checker using Cargo, Python 3.14 or later, and uv:
+
+```sh
+shasum -a 256 --check .checks/package-boundaries/SHA256SUMS
+uv run --locked --script .checks/package-boundaries/check-package-boundaries.py --root . --config package-boundaries.json
+```
+
+The bundled guide's npm resolver setup applies when a policy includes JavaScript or TypeScript packages.
 
 Released under the [MIT license](LICENSE).

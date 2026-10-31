@@ -5,7 +5,6 @@ use crate::{
     InputError,
     MAX_FILE_BYTES,
     Region,
-    SkipReason,
     Source,
     SourceRead,
     Target,
@@ -175,6 +174,19 @@ pub enum Input {
     Candidate(Candidate),
     Error(FileError),
     File(Target),
+}
+
+/// Why a selected file was not assessed. JSON skip records name it as `reason`, with the variant's
+/// fields beside it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum SkipReason {
+    /// The file contains a NUL byte.
+    Binary,
+    /// A directory search found a symbolic link, which it does not follow.
+    Symlink,
+    /// The file exceeds `MAX_FILE_BYTES`, so no request could carry it whole.
+    TooLarge { bytes: u64 },
 }
 
 /// An input after its file was read: a candidate to assess, or a file the scan skips.

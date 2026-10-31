@@ -1,13 +1,13 @@
 [package]
-name = "ev-grep"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-publish.workspace = true
-license.workspace = true
-repository.workspace = true
-homepage.workspace = true
 description = "Find files by meaning with Jev"
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+name = "ev-grep"
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [package.metadata.dist]
 dist = true
@@ -17,9 +17,9 @@ workspace = true
 
 [dependencies]
 clap.workspace = true
-futures-util.workspace = true
 ev-grep-core.workspace = true
 ev-grep-jev.workspace = true
+futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -30,5 +30,5 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
-wiremock.workspace = true
 tempfile.workspace = true
+wiremock.workspace = true

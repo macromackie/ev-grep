@@ -1,8 +1,8 @@
 use reqwest::{Client, Response, header::CONTENT_TYPE};
 use tokio::{sync::SemaphorePermit, time::Instant};
 
-use super::AttemptResult;
-use crate::{Provider, RequestError, protocol, telemetry};
+use super::result::AttemptResult;
+use crate::{Provider, RequestError, error::ErrorBody, protocol, telemetry};
 
 /// The largest response body Jev reads, in bytes.
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
@@ -34,7 +34,7 @@ where
             let body = if (401..=403).contains(&response.status().as_u16()) {
                 protocol::parse_error_body(&read(&mut response).await?)
             } else {
-                protocol::ErrorBody::default()
+                ErrorBody::default()
             };
             return Err(RequestError::from_status_response(
                 &response, body, provider,

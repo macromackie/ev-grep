@@ -8,7 +8,28 @@ use core::time::Duration;
 
 use tracing::{Level, Span, field};
 
-use crate::{Provider, RequestError};
+use crate::{FailureKind, Provider, RequestError};
+
+struct FailureFields<'failure> {
+    failure: Option<&'failure RequestError>,
+}
+
+impl FailureFields<'_> {
+    fn read_kind(&self) -> Option<field::DisplayValue<FailureKind>> {
+        self.failure.map(|error| field::display(error.kind))
+    }
+
+    fn read_retry_after_ms(&self) -> Option<u64> {
+        self.failure
+            .and_then(|error| error.retry_after)
+            .map(to_millis)
+    }
+
+    fn read_status(&self) -> Option<u16> {
+        let failure = self.failure?;
+        failure.status
+    }
+}
 
 /// The events Jev records. Each event names its member in an `event` field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,14 +38,14 @@ pub(crate) enum LogEvent {
     /// hedged pair, records none; its `provider.attempt` span still closes.
     AttemptFinished,
     /// A logical request returned an answer or a failure.
-    RequestFinished,
+    RequestFinished { attempts: usize, hedges: usize },
 }
 
 impl LogEvent {
     const fn name(self) -> &'static str {
         match self {
             Self::AttemptFinished => "provider.attempt_finished",
-            Self::RequestFinished => "provider.request_finished",
+            Self::RequestFinished { .. } => "provider.request_finished",
         }
     }
 }
@@ -73,17 +94,7 @@ pub(crate) fn record_attempt_finished<Success>(
     result: &Result<Success, RequestError>,
     elapsed: Duration,
 ) {
-    let failure = result.as_ref().err();
-    tracing::event!(
-        Level::INFO,
-        event = LogEvent::AttemptFinished.name(),
-        elapsed_ms = to_millis(elapsed),
-        kind = failure.map(|error| field::display(error.kind)),
-        status = failure.and_then(|error| error.status),
-        retry_after_ms = failure.and_then(|error| error.retry_after).map(to_millis),
-        request_id = failure.and_then(|error| error.request_id.as_deref()),
-        cf_ray = failure.and_then(|error| error.cf_ray.as_deref()),
-    );
+    record_finished(result, LogEvent::AttemptFinished, elapsed);
 }
 
 /// Records how the current request ended, after `attempts` attempts, `hedges` of them hedges.
@@ -93,17 +104,46 @@ pub(crate) fn request_finished<Success>(
     hedges: usize,
     elapsed: Duration,
 ) {
-    let failure = result.as_ref().err();
-    tracing::event!(
-        Level::INFO,
-        event = LogEvent::RequestFinished.name(),
-        attempts,
-        hedges,
-        elapsed_ms = to_millis(elapsed),
-        kind = failure.map(|error| field::display(error.kind)),
-        status = failure.and_then(|error| error.status),
-        retry_after_ms = failure.and_then(|error| error.retry_after).map(to_millis),
+    record_finished(
+        result,
+        LogEvent::RequestFinished { attempts, hedges },
+        elapsed,
     );
+}
+
+fn record_finished<Success>(
+    result: &Result<Success, RequestError>,
+    event: LogEvent,
+    elapsed: Duration,
+) {
+    let failure = result.as_ref().err();
+    let fields = FailureFields { failure };
+    match event {
+        LogEvent::AttemptFinished => {
+            tracing::event!(
+                Level::INFO,
+                event = event.name(),
+                elapsed_ms = to_millis(elapsed),
+                kind = fields.read_kind(),
+                status = fields.read_status(),
+                retry_after_ms = fields.read_retry_after_ms(),
+                request_id = failure.and_then(|error| error.request_id.as_deref()),
+                cf_ray = failure.and_then(|error| error.cf_ray.as_deref()),
+            );
+        },
+        LogEvent::RequestFinished { attempts, hedges } => {
+            tracing::event!(
+                Level::INFO,
+                event = event.name(),
+                attempts,
+                hedges,
+                elapsed_ms = to_millis(elapsed),
+                kind = fields.read_kind(),
+                status = fields.read_status(),
+                retry_after_ms = fields.read_retry_after_ms(),
+            );
+        },
+    }
 }
 
 /// Whole milliseconds, as a field that subscribers record as a number.

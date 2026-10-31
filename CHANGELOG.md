@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.2
+
+- Source builds use Rust 1.98.0, with formatting pinned to nightly-2026-10-27.
+- Update rustls to 0.23.46, including the [session-key debug redaction fix](https://rustsec.org/advisories/RUSTSEC-2026-0346.html).
+- Update certificate verification and trust roots for the [webpki](https://rustsec.org/advisories/RUSTSEC-2026-0382.html) and [webpki-roots](https://rustsec.org/advisories/RUSTSEC-2026-0381.html) advisories.
+- Update Tokio to 1.53.3 for the [AsyncFd I/O safety fix](https://rustsec.org/advisories/RUSTSEC-2026-0386.html).
+
 ## v0.8.1
 
 - The release workflow regenerates exactly from its configuration, including pinned action versions and comments.

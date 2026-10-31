@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#MISE description="Tag and dispatch the version commit without changing existing release tags"
+
+main() {
+  set -euo pipefail
+
+  version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+  tag="v${version}"
+  message=$(git log -1 --format=%B)
+  if [[ "${message}" != "${tag}" ]]; then
+    echo "Not a version commit; nothing to release."
+    exit 0
+  fi
+  : "${GITHUB_SHA:?}"
+  : "${GH_REPO:?}"
+  existing=$(git ls-remote --tags origin "refs/tags/${tag}" | cut -f1)
+  if [[ -n "${existing}" ]] && [[ "${existing}" != "${GITHUB_SHA}" ]]; then
+    echo "::error::${tag} already points to a different commit. Use a new version."
+    exit 1
+  fi
+  if [[ -z "${existing}" ]]; then
+    gh api "repos/${GH_REPO}/git/refs" -f ref="refs/tags/${tag}" -f sha="${GITHUB_SHA}" > /dev/null
+  fi
+  published=$(gh release view "${tag}" --json isDraft --jq '.isDraft' 2>/dev/null || true)
+  if [[ "${published}" = false ]]; then
+    echo "${tag} is already published."
+    exit 0
+  fi
+  gh workflow run release.yml --ref "${tag}" -f tag="${tag}"
+  echo "Started ${tag} at ${GITHUB_SHA}."
+}
+
+main "$@"

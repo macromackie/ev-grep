@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#MISE description="Check formatting, all Rust targets, tests, and public documentation"
+
+main() {
+  set -euo pipefail
+
+  shasum -a 256 --check .checks/clone-detector/SHA256SUMS
+  uv run --locked --script .checks/clone-detector/check-clones.py --root . --config copy-detector.json
+  mise run check-dependencies
+  shasum -a 256 --check .checks/package-boundaries/SHA256SUMS
+  uv run --locked --script .checks/package-boundaries/check-package-boundaries.py --root . --config package-boundaries.json
+  cargo +nightly-2026-10-27 fmt --all --check
+  cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+  cargo test --workspace --locked
+  RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --all-features --locked
+}
+
+main "$@"

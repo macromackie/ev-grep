@@ -3,7 +3,10 @@ use alloc::collections::BTreeMap;
 use ev_grep_core::{Assessment, DecisionBatch, Outcome, RequestInfo};
 use serde::Deserialize;
 
-use crate::{RequestError, error::is_identifier};
+use crate::{
+    RequestError,
+    error::{ErrorBody, is_identifier},
+};
 
 #[derive(Deserialize)]
 struct Response {
@@ -89,18 +92,6 @@ struct ErrorDetail {
 #[derive(Deserialize)]
 struct ErrorMetadata {
     reasons: Option<Vec<String>>,
-}
-
-/// The fields of a provider error body that are safe to print. Flagged input and messages are never
-/// kept.
-#[derive(Default)]
-pub(crate) struct ErrorBody {
-    /// The provider's error code, such as `OpenRouter`'s numeric `error.code`, kept only when it
-    /// is a short identifier.
-    pub code: Option<Box<str>>,
-    /// Present only when the body names moderation reasons. Reasons that are not short identifiers
-    /// are dropped.
-    pub moderation: Option<Vec<String>>,
 }
 
 /// The safe fields of a provider error body. A body that is not a JSON error object, such as a

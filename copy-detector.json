@@ -1,0 +1,32 @@
+{
+  "detectorVersion": "5.4.2",
+  "minTokens": 50,
+  "minLines": 5,
+  "sourceRoots": ["crates", "mise-tasks"],
+  "sourceFiles": [],
+  "formats": {
+    "rust": [".rs"],
+    "python": [".py"],
+    "typescript": [".ts", ".mts", ".cts"],
+    "tsx": [".tsx"],
+    "javascript": [".js", ".mjs", ".cjs"],
+    "jsx": [".jsx"],
+    "bash": [".sh"],
+    "css": [".css"]
+  },
+  "extensionlessSources": "shebang",
+  "exclusions": [
+    {
+      "pattern": "**/target/**",
+      "reason": "Cargo emits generated build output and dependency sources here."
+    },
+    {
+      "pattern": "crates/*/tests/fixtures/**",
+      "reason": "These frozen repository projects are test inputs rather than imported test implementations."
+    },
+    {
+      "pattern": "**/.checks/**",
+      "reason": "A committed provenance lock verifies these unchanged released checker dependencies."
+    }
+  ]
+}

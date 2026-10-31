@@ -4,6 +4,18 @@
     "name": "Smoke ${{ matrix.target }}"
     "runs-on": "${{ matrix.runner }}"
     "steps":
+      - "env":
+          "EXPECTED_MACHINE": "${{ matrix.machine }}"
+        "name": "Verify native architecture"
+        "run": |
+          machine=$(uname -m)
+          test "${machine}" = "${EXPECTED_MACHINE}"
+      - "if": "matrix.target == 'x86_64-apple-darwin'"
+        "name": "Reject Rosetta translation"
+        "run": |
+          translated=$(/usr/sbin/sysctl -in sysctl.proc_translated)
+          [[ "${translated}" =~ ^0?$ ]]
+        "shell": "bash"
       - "uses": "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803" # v6
         "with":
           "persist-credentials": false
@@ -12,42 +24,36 @@
           "merge-multiple": true
           "path": "artifacts"
           "pattern": "artifacts-build-local-*"
+      - "uses": "jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c" # v4
+        "with":
+          "cache": false
+          "env": false
+          "install_args": "python@3.14.7 uv@0.12.9"
+          "version": "2026.8.12"
       - "env":
           "PLAN": "${{ inputs.plan }}"
           "TARGET": "${{ matrix.target }}"
         "name": "Run packaged binary"
-        "run": |
-          set -euo pipefail
-          archive="artifacts/ev-grep-${TARGET}.tar.xz"
-          expected=$(awk '{print $1}' "${archive}.sha256")
-          actual=$(shasum -a 256 "${archive}" | awk '{print $1}')
-          test "${actual}" = "${expected}"
-          mkdir unpacked
-          tar -xJf "${archive}" -C unpacked
-          binary="${PWD}/unpacked/ev-grep-${TARGET}/ev-grep"
-          version=$(printf '%s' "${PLAN}" | jq -r '.releases[] | select(.app_name == "ev-grep") | .app_version')
-          reported=$("${binary}" --version)
-          test "${reported}" = "ev-grep ${version}"
-          "${binary}" --help
-          printf 'fn main() {}\n' > sample.rs
-          "${binary}" 'contains a main function' sample.rs --dry-run --json > output.jsonl
-          jq -s -e '[.[] | select(.type == "selected")] | length == 1' output.jsonl
-        "shell": "bash"
+        "run": "mise run release:verify-package"
       - "env":
           "TARGET": "${{ matrix.target }}"
         "name": "Search through local fake providers"
-        "run": "mise-tasks/release/smoke \"unpacked/ev-grep-${TARGET}/ev-grep\""
+        "run": "mise run release:smoke \"unpacked/ev-grep-${TARGET}/ev-grep\""
     "strategy":
       "fail-fast": false
       "matrix":
         "include":
-          - "runner": "macos-14"
+          - "machine": "arm64"
+            "runner": "namespace-profile-public-macos"
             "target": "aarch64-apple-darwin"
-          - "runner": "macos-15-intel"
+          - "machine": "x86_64"
+            "runner": "macos-15-intel"
             "target": "x86_64-apple-darwin"
-          - "runner": "ubuntu-24.04-arm"
+          - "machine": "aarch64"
+            "runner": "namespace-profile-release-linux-arm64"
             "target": "aarch64-unknown-linux-gnu"
-          - "runner": "ubuntu-22.04"
+          - "machine": "x86_64"
+            "runner": "namespace-profile-release-linux"
             "target": "x86_64-unknown-linux-gnu"
     "timeout-minutes": 5
 "name": "Release smoke tests"

@@ -6,36 +6,32 @@
 "jobs":
   "rust":
     "name": "Rust"
-    "runs-on": "ubuntu-latest"
+    "runs-on": "namespace-profile-public-linux"
     "steps":
       - "uses": "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803" # v6
         "with":
           "persist-credentials": false
+      - "uses": "jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c" # v4
+        "with":
+          "cache": false
+          "env": false
+          "install": false
+          "version": "2026.8.12"
+      - "name": "Install pinned check tools"
+        "run": "mise install python uv aqua:EmbarkStudios/cargo-deny github:bnjbvr/cargo-machete"
       - "env":
           "RELEASE_TAG": "${{ github.event.inputs.tag }}"
         "if": "github.event_name == 'workflow_dispatch' && github.event.inputs.tag != 'dry-run' && github.event.inputs.tag != ''"
         "name": "Verify release source"
-        "run": |
-          set -euo pipefail
-          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
-          test "${RELEASE_TAG}" = "v${version}"
-          test "${GITHUB_REF}" = "refs/tags/${RELEASE_TAG}"
-          head=$(git rev-parse HEAD)
-          test "${head}" = "${GITHUB_SHA}"
+        "run": "mise run release:verify-source"
       - "name": "Install pinned Rust toolchain"
         "run": "rustup show active-toolchain"
       # rustfmt.toml sets unstable options, so formatting runs on one pinned dated nightly with only rustfmt.
       - "name": "Install pinned nightly rustfmt"
         "run": "rustup toolchain install nightly-2026-10-27 --profile minimal --component rustfmt"
       - "uses": "Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0" # v2.9.3
-      - "env":
-          "RUSTDOCFLAGS": "-D warnings"
-        "name": "Check"
-        "run": |
-          cargo +nightly-2026-10-27 fmt --all --check
-          cargo clippy --workspace --all-targets --locked -- -D warnings
-          cargo test --workspace --locked
-          cargo doc --workspace --no-deps --locked
+      - "name": "Check"
+        "run": "mise run check"
     "timeout-minutes": 10
 "name": "Check"
 "on":

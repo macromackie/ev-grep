@@ -5,7 +5,7 @@ use clap::Parser;
 use ev_grep_core::{MAX_QUERY_BYTES, read_text};
 use ev_grep_jev::Provider;
 
-use crate::{error::CliError, output::Sort, telemetry::Environment};
+use crate::{error::CliError, sort::Sort, telemetry::Environment};
 
 #[derive(Debug, Parser)]
 #[expect(

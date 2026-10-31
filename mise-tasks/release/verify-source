@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#MISE description="Verify that a release tag names the checked-out version commit"
+
+main() {
+  set -euo pipefail
+
+  : "${RELEASE_TAG:?}"
+  : "${GITHUB_REF:?}"
+  : "${GITHUB_SHA:?}"
+
+  version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+  test "${RELEASE_TAG}" = "v${version}"
+  test "${GITHUB_REF}" = "refs/tags/${RELEASE_TAG}"
+  head=$(git rev-parse HEAD)
+  test "${head}" = "${GITHUB_SHA}"
+}
+
+main "$@"

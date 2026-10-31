@@ -6,6 +6,8 @@ mod cli;
 mod error;
 mod inputs;
 mod output;
+mod sort;
+mod state;
 mod telemetry;
 
 use core::future;

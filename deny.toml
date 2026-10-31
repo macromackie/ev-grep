@@ -20,7 +20,14 @@ yanked = "deny"
 [bans]
 allow = []
 allow-wildcard-paths = false
-deny = []
+# Only the application binary installs the telemetry subscriber.
+deny = [
+  { crate = "opentelemetry_sdk", reason = "Only application binaries install telemetry exporters.", wrappers = [
+  ] },
+  { crate = "tracing-subscriber", reason = "Only application binaries install telemetry subscribers.", wrappers = [
+    "ev-grep",
+  ] },
+]
 external-default-features = "deny"
 highlight = "all"
 multiple-versions = "deny"
@@ -400,9 +407,21 @@ allow = [
 ]
 crate = "web-sys"
 
-# ring needs its default features.
+# errno, ring, rustix, tempfile and winapi-util need these Windows APIs and default features.
 [[bans.features]]
-allow = ["default", "Win32_Foundation", "Win32_System_Threading"]
+allow = [
+  "default",
+  "Win32_Foundation",
+  "Win32_Networking",
+  "Win32_Networking_WinSock",
+  "Win32_Storage",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Console",
+  "Win32_System_Diagnostics",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+]
 crate = "windows-sys@0.52.0"
 
 # anstyle-query, anstyle-wincon, errno, mio, rustix, schannel, socket2, tempfile, tokio and

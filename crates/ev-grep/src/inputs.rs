@@ -20,29 +20,17 @@ use ev_grep_core::{
     read_text,
 };
 use futures_util::{Stream, StreamExt as _, stream};
-use serde::Serialize;
-use serde_json::{Value, from_value};
+use serde_json::from_value;
 use sha2::{Digest as _, Sha256};
 use tokio::{
     fs::File,
     io::{AsyncBufRead, AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _, BufReader, stdin},
 };
 
-use crate::{cli::Cli, error::CliError};
+use crate::{cli::Cli, error::CliError, state::StateInput};
 
 const MAX_RECORD_BYTES: usize = 512 * 1024;
 pub(crate) type Inputs = Pin<Box<dyn Stream<Item = Input>>>;
-
-#[derive(Serialize)]
-#[expect(
-    clippy::arbitrary_source_item_ordering,
-    reason = "the field order is the order of the record's JSON keys"
-)]
-pub(crate) struct StateInput {
-    pub state: Value,
-    pub input_id: String,
-    pub bytes: usize,
-}
 
 pub(crate) fn read_state(path: &Path) -> Result<StateInput, CliError> {
     let text = if path.as_os_str() == "-" {

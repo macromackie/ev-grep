@@ -1,11 +1,7 @@
 use std::{fs::File, io::Read, path::Path};
 
-use crate::{InputError, LineRange, Target, label};
+use crate::{InputError, LineRange, MAX_FILE_BYTES, Target, label};
 
-/// The largest file, candidate or request input, in bytes, that a search reads.
-pub const MAX_FILE_BYTES: usize = 64 * 1024;
-/// The largest query, in bytes.
-pub const MAX_QUERY_BYTES: usize = 8 * 1024;
 /// `MAX_FILE_BYTES` in the type of file lengths and read limits.
 #[expect(
     clippy::as_conversions,

@@ -1,4 +1,6 @@
 mod attempt;
+mod post;
+mod result;
 
 use core::time::Duration;
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -11,6 +13,7 @@ use tokio::{
 };
 use tracing::{Instrument as _, Span};
 
+use self::post::Post;
 use crate::{
     FailureKind,
     JevError,
@@ -23,10 +26,6 @@ use crate::{
 const BUDGET: Duration = Duration::from_secs(15);
 /// The most attempts, hedges included, that one logical request makes.
 const MAX_ATTEMPTS: usize = 3;
-
-/// A completed attempt retains its slot until the shared failure state is updated.
-type AttemptResult<'permit, Validated> =
-    (SemaphorePermit<'permit>, Result<Validated, RequestError>);
 
 #[derive(Debug)]
 pub(crate) struct Transport {
@@ -257,43 +256,6 @@ impl Transport {
                 }
             }
         }
-    }
-}
-
-/// One request's body and destination, which each of its attempts sends.
-struct Post<'post, Validator> {
-    body: &'post [u8],
-    client: &'post Client,
-    endpoint: &'post str,
-    provider: Provider,
-    validate: Validator,
-}
-
-impl<Validated, Validator> Post<'_, Validator>
-where
-    Validated: Send,
-    Validator: Fn(&[u8]) -> Result<Validated, RequestError> + Sync,
-{
-    /// Attempt `attempt` of the request, counted from 1, holding `permit` until its result is
-    /// processed so a credential rejection or rate limit is recorded before another attempt starts.
-    fn send<'permit>(
-        &'permit self,
-        permit: SemaphorePermit<'permit>,
-        attempt: usize,
-        hedge: bool,
-    ) -> impl Future<Output = AttemptResult<'permit, Validated>> + Send + 'permit
-    where
-        Validated: 'permit,
-    {
-        attempt::send(
-            self.client,
-            self.endpoint,
-            self.provider,
-            self.body,
-            permit,
-            &self.validate,
-        )
-        .instrument(telemetry::create_attempt_span(attempt, hedge))
     }
 }
 

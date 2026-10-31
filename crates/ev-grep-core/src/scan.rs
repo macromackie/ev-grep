@@ -1,5 +1,4 @@
 use futures_util::{FutureExt as _, Stream, StreamExt as _};
-use serde::Serialize;
 use tracing::Instrument as _;
 
 use crate::{
@@ -9,8 +8,8 @@ use crate::{
     FileError,
     Input,
     InputError,
-    LineRange,
     Loaded,
+    ScanEvent,
     SupportingSource,
     telemetry,
 };
@@ -49,34 +48,6 @@ pub trait Evaluator: Sync {
         questions: &[crate::Question<'_>],
         state: &serde_json::Value,
     ) -> impl Future<Output = Result<crate::DecisionBatch, Self::Error>> + Send;
-}
-
-/// Why a selected file was not assessed. JSON skip records name it as `reason`, with the variant's
-/// fields beside it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(tag = "reason", rename_all = "snake_case")]
-pub enum SkipReason {
-    /// The file contains a NUL byte.
-    Binary,
-    /// A directory search found a symbolic link, which it does not follow.
-    Symlink,
-    /// The file exceeds `MAX_FILE_BYTES`, so no request could carry it whole.
-    TooLarge { bytes: u64 },
-}
-
-/// One per-input outcome that a scan emits.
-#[derive(Debug)]
-pub enum ScanEvent {
-    Error(FileError),
-    Result {
-        assessment: Box<Assessment>,
-        candidate: Candidate,
-    },
-    Skipped {
-        lines: Option<LineRange>,
-        path: String,
-        reason: SkipReason,
-    },
 }
 
 /// Assesses each input in a bounded pool that all input modes share.

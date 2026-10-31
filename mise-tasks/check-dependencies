@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#MISE description="Audit every locked Cargo dependency check with a bounded database refresh"
+#MISE timeout="3m"
+#USAGE arg "[workspace]" default="." help="Cargo workspace directory"
+
+main() {
+  set -euo pipefail
+
+  local workspace=${1:-.}
+  cargo deny --manifest-path "${workspace}/Cargo.toml" --all-features --locked check --deny warnings
+  cargo machete "${workspace}"
+}
+
+main "$@"

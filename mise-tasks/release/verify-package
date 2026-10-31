@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#MISE description="Verify the release archive, version, and offline search output"
+
+main() {
+  set -euo pipefail
+
+  : "${TARGET:?}"
+  : "${PLAN:?}"
+
+  archive="artifacts/ev-grep-${TARGET}.tar.xz"
+  expected=$(awk '{print $1}' "${archive}.sha256")
+  actual=$(shasum -a 256 "${archive}" | awk '{print $1}')
+  test "${actual}" = "${expected}"
+  mkdir unpacked
+  tar -xJf "${archive}" -C unpacked
+  binary="${PWD}/unpacked/ev-grep-${TARGET}/ev-grep"
+  version=$(printf '%s' "${PLAN}" | jq -r '.releases[] | select(.app_name == "ev-grep") | .app_version')
+  reported=$("${binary}" --version)
+  test "${reported}" = "ev-grep ${version}"
+  "${binary}" --help
+  printf 'fn main() {}\n' > sample.rs
+  "${binary}" 'contains a main function' sample.rs --dry-run --json > output.jsonl
+  jq -s -e '[.[] | select(.type == "selected")] | length == 1' output.jsonl
+}
+
+main "$@"

@@ -16,23 +16,28 @@ pub struct Position {
 }
 
 impl Position {
+    fn add_character(mut self, character: char) -> Result<Self, InputError> {
+        if character == '\n' {
+            self.line = self
+                .line
+                .checked_add(1)
+                .ok_or(InputError::PositionOverflow)?;
+            self.column = 0;
+        } else {
+            self.column = self
+                .column
+                .checked_add(1)
+                .ok_or(InputError::PositionOverflow)?;
+        }
+        Ok(self)
+    }
+
     /// The position after `text`, counting a newline as the start of the next line.
     #[inline]
     pub fn advance(self, text: &str) -> Result<Self, InputError> {
         let mut position = self;
         for character in text.chars() {
-            if character == '\n' {
-                position.line = position
-                    .line
-                    .checked_add(1)
-                    .ok_or(InputError::PositionOverflow)?;
-                position.column = 0;
-            } else {
-                position.column = position
-                    .column
-                    .checked_add(1)
-                    .ok_or(InputError::PositionOverflow)?;
-            }
+            position = position.add_character(character)?;
         }
         Ok(position)
     }
@@ -43,18 +48,7 @@ impl Position {
             if position == self {
                 return Ok(offset);
             }
-            if character == '\n' {
-                position.line = position
-                    .line
-                    .checked_add(1)
-                    .ok_or(InputError::PositionOverflow)?;
-                position.column = 0;
-            } else {
-                position.column = position
-                    .column
-                    .checked_add(1)
-                    .ok_or(InputError::PositionOverflow)?;
-            }
+            position = position.add_character(character)?;
         }
         if position != self {
             return Err(InputError::PositionOutsideContext);

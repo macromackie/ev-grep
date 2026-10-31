@@ -8,6 +8,11 @@ use serde_json::{Value, value::RawValue};
 
 use crate::InputError;
 
+const RESERVED_OBJECT_KEYS: &[&str] = &[
+    "$serde_json::private::Number",
+    "$serde_json::private::RawValue",
+];
+
 struct ObjectValues;
 
 impl<'de> Visitor<'de> for ObjectValues {
@@ -25,7 +30,7 @@ impl<'de> Visitor<'de> for ObjectValues {
     {
         let mut values = Vec::new();
         while let Some(key) = object.next_key::<String>()? {
-            if key == "$serde_json::private::Number" || key == "$serde_json::private::RawValue" {
+            if RESERVED_OBJECT_KEYS.contains(&key.as_str()) {
                 return Err(Access::Error::custom(format!(
                     "reserved JSON object key {key:?} is not supported"
                 )));

@@ -1,144 +1,30 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
 # MISE description="Send a packaged binary's search to local HTTPS and plain-HTTP fake providers"
 # USAGE arg "<binary>" help="The ev-grep binary to run"
-"""Run one search with a packaged ev-grep binary against fake providers on 127.0.0.1.
+# /// script
+# requires-python = ">=3.14"
+# dependencies = []
+# ///
+"""Verify packaged TLS roots with `mise run release:smoke <binary>` and local fake providers."""
 
-The HTTPS fake's certificate authority reaches the binary only through `SSL_CERT_FILE`. The same search without it
-must fail with a TLS error, so a pass shows that the binary verifies certificates against the roots it loads.
-Release CI runs this script on each target's archive; it needs only Python 3.9 and OpenSSL or LibreSSL.
-"""
-
-import json
-import ssl
-import subprocess
 import sys
-import tempfile
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-KEY = "release-smoke-key"
-QUERY = "contains a main function"
-REQUEST_CONFIG = """\
-[req]
-distinguished_name = name
-[name]
-[authority]
-basicConstraints = critical, CA:TRUE
-keyUsage = critical, keyCertSign
-"""
-SERVER_EXTENSIONS = """\
-basicConstraints = critical, CA:FALSE
-keyUsage = critical, digitalSignature, keyEncipherment
-extendedKeyUsage = serverAuth
-subjectAltName = IP:127.0.0.1
-"""
 
+def main() -> None:
+    """Compose the standalone smoke program without installing a package."""
+    library = Path(__file__).resolve().parents[1] / "lib"
 
-class Provider(BaseHTTPRequestHandler):
-    """Answer every question of a decision request with a confident match from the requested model."""
+    sys.path.insert(0, str(library))
 
-    def do_POST(self):
-        request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        self.server.authorizations.append(self.headers["Authorization"])
-        answer = {
-            "type": "choice",
-            "choice": "match",
-            "confidence": 0.9,
-            "probabilities": {"match": 0.9, "no_match": 0.05, "uncertain": 0.05},
-        }
-        body = json.dumps(
-            {
-                "model": request["model"],
-                "answers": {question: answer for question in request["questions"]},
-                "usage": {"input_tokens": 20, "output_tokens": 4},
-            }
-        ).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+    from release import errors, exit_status, output, run, settings
 
+    try:
+        report = run.run(binary=settings.read_binary())
+    except errors.SmokeFailed as error:
+        output.finish(error=str(error), report=(), status=exit_status.ExitStatus.FAILED)
 
-def serve(context):
-    """Start a fake provider on a free port; with a TLS context, every connection must complete a handshake."""
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
-    server.authorizations = []
-    if context:
-        server.socket = context.wrap_socket(server.socket, server_side=True)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
-
-
-def search(binary, directory, endpoint, authority):
-    """Run the search with only a home directory, the fake key and, when given, the certificate authority file."""
-    environment = {"HOME": str(directory), "OPENROUTER_API_KEY": KEY}
-    if authority:
-        environment["SSL_CERT_FILE"] = str(authority)
-    run = subprocess.run(
-        [binary, "--json", "--endpoint", endpoint, QUERY, "sample.rs"],
-        check=False,
-        cwd=directory,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    records = [json.loads(line) for line in run.stdout.splitlines()]
-    return run, records
-
-
-def main():
-    binary = str(Path(sys.argv[1]).resolve())
-    with tempfile.TemporaryDirectory() as name:
-        directory = Path(name)
-        (directory / "request.cnf").write_text(REQUEST_CONFIG)
-        (directory / "server.cnf").write_text(SERVER_EXTENSIONS)
-        (directory / "sample.rs").write_text("fn main() {}\n")
-        for command in [
-            (
-                "req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 -subj /CN=ev-grep-release-smoke-ca"
-                " -config request.cnf -extensions authority -keyout ca.key -out ca.pem"
-            ),
-            "req -new -newkey rsa:2048 -nodes -subj /CN=127.0.0.1 -config request.cnf -keyout server.key -out server.csr",
-            (
-                "x509 -req -sha256 -days 1 -set_serial 2 -in server.csr -CA ca.pem -CAkey ca.key -extfile server.cnf"
-                " -out server.pem"
-            ),
-        ]:
-            openssl = subprocess.run(
-                ["openssl", *command.split()], check=False, cwd=directory, capture_output=True, text=True
-            )
-            if openssl.returncode:
-                sys.exit(f"openssl {command} failed:\n{openssl.stderr}")
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(directory / "server.pem", directory / "server.key")
-        https = serve(context)
-        plain = serve(None)
-        cases = [
-            ("HTTPS with SSL_CERT_FILE", https, "https", directory / "ca.pem", 0, "result", 1),
-            ("HTTPS without the certificate authority", https, "https", None, 2, "error", 0),
-            ("plain HTTP", plain, "http", None, 0, "result", 1),
-        ]
-        for label, server, scheme, authority, code, record, requests in cases:
-            sent = len(server.authorizations)
-            endpoint = f"{scheme}://127.0.0.1:{server.server_address[1]}/"
-            run, records = search(binary, directory, endpoint, authority)
-            types = [r["type"] for r in records]
-            authorizations = server.authorizations[sent:]
-            print(f"{label}: exit {run.returncode}, records {types}, {len(authorizations)} requests")
-            failures = []
-            if run.returncode != code:
-                failures.append(f"expected exit {code}")
-            if types.count(record) != 1:
-                failures.append(f"expected one {record} record")
-            if record == "error" and [r["data"]["kind"] for r in records if r["type"] == "error"] != ["tls"]:
-                failures.append("expected a tls error")
-            if authorizations != [f"Bearer {KEY}"] * requests:
-                failures.append(f"expected {requests} requests with the fake key")
-            if failures:
-                sys.exit(f"{label}: {'; '.join(failures)}\nstdout:\n{run.stdout}\nstderr:\n{run.stderr}")
+    output.finish(report=report, status=exit_status.ExitStatus.PASSED)
 
 
 if __name__ == "__main__":

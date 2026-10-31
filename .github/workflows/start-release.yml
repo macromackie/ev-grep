@@ -8,39 +8,22 @@
     "permissions":
       "actions": "write" # Start release.yml for the version tag.
       "contents": "write" # Create the version tag.
-    "runs-on": "ubuntu-latest"
+    "runs-on": "namespace-profile-public-linux"
     "steps":
       - "uses": "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803" # v6
         "with":
           "persist-credentials": false
+      - "uses": "jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c" # v4
+        "with":
+          "cache": false
+          "env": false
+          "install": false
+          "version": "2026.8.12"
       - "env":
           "GH_REPO": "${{ github.repository }}"
           "GH_TOKEN": "${{ github.token }}"
         "name": "Release the version commit"
-        "run": |
-          set -euo pipefail
-          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
-          tag="v${version}"
-          message=$(git log -1 --format=%B)
-          if [[ "${message}" != "${tag}" ]]; then
-            echo "Not a version commit; nothing to release."
-            exit 0
-          fi
-          existing=$(git ls-remote --tags origin "refs/tags/${tag}" | cut -f1)
-          if [[ -n "${existing}" ]] && [[ "${existing}" != "${GITHUB_SHA}" ]]; then
-            echo "::error::${tag} already points to a different commit. Use a new version."
-            exit 1
-          fi
-          if [[ -z "${existing}" ]]; then
-            gh api "repos/${GH_REPO}/git/refs" -f ref="refs/tags/${tag}" -f sha="${GITHUB_SHA}" > /dev/null
-          fi
-          published=$(gh release view "${tag}" --json isDraft --jq '.isDraft' 2>/dev/null || true)
-          if [[ "${published}" = false ]]; then
-            echo "${tag} is already published."
-            exit 0
-          fi
-          gh workflow run release.yml --ref "${tag}" -f tag="${tag}"
-          echo "Started ${tag} at ${GITHUB_SHA}."
+        "run": "mise run release:start"
     "timeout-minutes": 5
 "name": "Start release"
 "on":
