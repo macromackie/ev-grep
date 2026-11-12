@@ -79,25 +79,30 @@ Other outcomes omit `reason`. These reasons describe routing; the classifier doe
 
 An error's `kind` names the failure, so scripts can branch on it without parsing the message:
 
-| Kind                  | Failure                                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `configuration`       | Invalid settings, such as conflicting arguments, an invalid glob, an unsupported model, or a missing API key              |
-| `io`                  | An input could not be read, such as a missing file, or output could not be written                                        |
-| `unsupported_file`    | A symbolic link, a special file, or a directory given a line range                                                        |
-| `too_large`           | An input over a [size limit](./limits.md), or a selection over `--max-candidates`; nothing was truncated                  |
-| `invalid_input`       | Malformed input, such as invalid UTF-8, an empty query, a line range outside its file, or invalid JSON                    |
-| `timeout`             | An attempt or the 15-second request budget timed out, or the provider answered HTTP 408                                   |
-| `connect`             | No connection to the provider was made                                                                                    |
-| `tls`                 | The TLS handshake failed                                                                                                  |
-| `transport`           | The connection failed while the request was sent or the response was read                                                 |
-| `rate_limited`        | The provider answered HTTP 429, or its rate limit outlasts the assessment's 15-second budget                              |
-| `unavailable`         | The provider or its gateway answered HTTP 500, 502, 503, 504, 520, 522, or 524                                            |
-| `moderation`          | The provider answered HTTP 403 and named moderation reasons                                                               |
-| `credential_rejected` | The provider answered HTTP 401, 402, or a 403 without moderation reasons: it rejected the key, or the key reached a limit |
-| `rejected`            | The provider answered another HTTP error, such as 400 or 404                                                              |
-| `invalid_response`    | The response failed validation, such as probabilities that do not sum to one                                              |
-| `model_mismatch`      | The response names a different model than the one requested                                                               |
-| `response_too_large`  | The response exceeds 64 KiB                                                                                               |
+| Kind                       | Failure                                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `configuration`            | Invalid settings, such as conflicting arguments, an invalid glob, an unsupported model, or a missing API key |
+| `io`                       | An input could not be read, such as a missing file, or output could not be written                           |
+| `unsupported_file`         | A symbolic link, a special file, or a directory given a line range                                           |
+| `too_large`                | An input over a [size limit](./limits.md), or a selection over `--max-candidates`; nothing was truncated     |
+| `invalid_input`            | Malformed input, such as invalid UTF-8, an empty query, a line range outside its file, or invalid JSON       |
+| `timeout`                  | An attempt or the 15-second request budget timed out, or the provider answered HTTP 408                      |
+| `connect`                  | No connection to the provider was made                                                                       |
+| `tls`                      | The TLS handshake failed                                                                                     |
+| `transport`                | The connection failed while the request was sent or the response was read                                    |
+| `rate_limited`             | The provider answered HTTP 429, or its rate limit outlasts the assessment's 15-second budget                 |
+| `unavailable`              | The provider or its gateway answered HTTP 500, 502, 503, 504, 520, 522, or 524                               |
+| `moderation`               | The provider answered HTTP 403 and named moderation reasons                                                  |
+| `credential_rejected`      | The provider answered HTTP 401 or an ordinary 403 and rejected the key                                       |
+| `budget_busy`              | OpenRouter funds are temporarily committed to other requests                                                 |
+| `insufficient_credits`     | Available OpenRouter credits cannot cover this request                                                       |
+| `key_budget_exceeded`      | The child key exhausted its provider-enforced spending limit                                                 |
+| `payment_required`         | OpenRouter answered HTTP 402 without a recognized budget source                                              |
+| `spending_budget_exceeded` | A configured OpenRouter workspace or guardrail spending budget is exhausted                                  |
+| `rejected`                 | The provider answered another HTTP error, such as 400 or 404                                                 |
+| `invalid_response`         | The response failed validation, such as probabilities that do not sum to one                                 |
+| `model_mismatch`           | The response names a different model than the one requested                                                  |
+| `response_too_large`       | The response exceeds 64 KiB                                                                                  |
 
 A `credential_rejected` error stops the search, because every later request would fail the same way. Its record has no
 file. No request starts after it, and requests already in flight are cancelled. Results that arrived earlier remain.

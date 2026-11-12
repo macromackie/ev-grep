@@ -3,20 +3,8 @@ use std::{io, time::SystemTime};
 
 use reqwest::{Response, header::RETRY_AFTER};
 
-use super::kind::FailureKind;
+use super::{body::ErrorBody, kind::FailureKind};
 use crate::Provider;
-
-/// The fields of a provider error body that are safe to print. Flagged input and messages are never
-/// kept.
-#[derive(Default)]
-pub(crate) struct ErrorBody {
-    /// The provider's error code, such as `OpenRouter`'s numeric `error.code`, kept only when it
-    /// is a short identifier.
-    pub code: Option<Box<str>>,
-    /// Present only when the body names moderation reasons. Reasons that are not short identifiers
-    /// are dropped.
-    pub moderation: Option<Vec<String>>,
-}
 
 /// A Jev request that produced no assessment, with only the provider details that are safe to
 /// print.
@@ -55,8 +43,17 @@ impl RequestError {
         body: ErrorBody,
         provider: Provider,
     ) -> Self {
-        let ErrorBody { code, moderation } = body;
         let status = response.status().as_u16();
+        let kind = FailureKind::from_provider_status(
+            status,
+            body.moderation.is_some(),
+            provider,
+            body.limit_source.as_deref(),
+        );
+        let mut message = body.render_message(status, provider, kind);
+        let ErrorBody {
+            code, moderation, ..
+        } = body;
         let header = |name: &str| {
             response
                 .headers()
@@ -67,22 +64,6 @@ impl RequestError {
         };
         let request_id = header("x-request-id");
         let cf_ray = header("cf-ray");
-        let kind = FailureKind::from_status_code(status, moderation.is_some());
-        let mut message = if kind == FailureKind::CredentialRejected {
-            format!(
-                "Jev returned HTTP {status}: credential rejected or key limit reached for \
-                 provider {provider}; check {}; no further requests were started",
-                provider.read_key_variable()
-            )
-        } else {
-            format!("Jev returned HTTP {status}; no assessment was recorded")
-        };
-        if let Some(reasons) = &moderation {
-            message.push_str("; flagged by moderation");
-            if !reasons.is_empty() {
-                message.extend([": ", reasons.join(", ").as_str()]);
-            }
-        }
         for (name, detail) in [
             ("code", &code),
             ("x-request-id", &request_id),

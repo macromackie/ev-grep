@@ -1,10 +1,12 @@
+mod body;
 mod kind;
 mod request;
 
+pub(crate) use body::ErrorBody;
 use ev_grep_core::{ErrorKind, Failure};
 pub use kind::FailureKind;
 pub use request::RequestError;
-pub(crate) use request::{ErrorBody, is_identifier};
+pub(crate) use request::is_identifier;
 use reqwest::header::InvalidHeaderValue;
 
 use crate::Provider;
@@ -66,11 +68,15 @@ impl Failure for JevError {
                     FailureKind::Connect => ErrorKind::Connect,
                     FailureKind::Tls => ErrorKind::Tls,
                     FailureKind::Transport => ErrorKind::Transport,
-                    FailureKind::RateLimited => ErrorKind::RateLimited,
+                    FailureKind::RateLimited | FailureKind::BudgetBusy => ErrorKind::RateLimited,
                     FailureKind::Unavailable => ErrorKind::Unavailable,
                     FailureKind::Moderation => ErrorKind::Moderation,
                     FailureKind::CredentialRejected => ErrorKind::CredentialRejected,
-                    FailureKind::Rejected => ErrorKind::Rejected,
+                    FailureKind::Rejected
+                    | FailureKind::InsufficientCredits
+                    | FailureKind::KeyBudgetExceeded
+                    | FailureKind::PaymentRequired
+                    | FailureKind::SpendingBudgetExceeded => ErrorKind::Rejected,
                     FailureKind::InvalidResponse => ErrorKind::InvalidResponse,
                     FailureKind::ModelMismatch => ErrorKind::ModelMismatch,
                     FailureKind::ResponseTooLarge => ErrorKind::ResponseTooLarge,

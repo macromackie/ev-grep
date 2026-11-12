@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.0
+
+OpenRouter payment refusals distinguish exhausted keys, insufficient credit, configured spending budgets, and temporary in-flight contention. Temporary contention follows the existing retry deadline. Provider response text remains redacted.
+
+Library callers matching Jev failure kinds need to handle the new budget and payment variants.
+
 ## v0.8.2
 
 - Source builds use Rust 1.98.0, with formatting pinned to nightly-2026-10-27.

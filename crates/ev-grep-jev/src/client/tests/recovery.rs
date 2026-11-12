@@ -136,3 +136,73 @@ async fn moderation_keeps_only_reason_codes() {
     assert!(!format!("{moderated:?}").contains("private"));
     server.verify().await;
 }
+
+#[tokio::test]
+async fn payment_limits_are_typed_and_redacted() {
+    let server = MockServer::start().await;
+    let source = build_cached_source();
+    for (index, (status, limit_source, expected)) in [
+        (402, "openrouter_key_limit", FailureKind::KeyBudgetExceeded),
+        (402, "openrouter_credits", FailureKind::InsufficientCredits),
+        (
+            403,
+            "openrouter_guardrail_budget",
+            FailureKind::SpendingBudgetExceeded,
+        ),
+        (
+            403,
+            "openrouter_workspace_budget",
+            FailureKind::SpendingBudgetExceeded,
+        ),
+        (402, "unknown", FailureKind::PaymentRequired),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let route = format!("/limit-{index}");
+        let response = json!({
+            "error": {
+                "code": status,
+                "message": "private provider response",
+                "metadata": { "limit_source": limit_source }
+            }
+        });
+        Mock::given(path(route.as_str()))
+            .respond_with(ResponseTemplate::new(status).set_body_json(response))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let rejected = build_openrouter(&server, &route)
+            .assess("query", &source)
+            .await
+            .expect_err("expected payment refusal");
+        assert_eq!(read_kind(&rejected), Some(expected));
+        assert!(!rejected.to_string().contains("private provider response"));
+    }
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn temporary_budget_contention_recovers_without_rejecting_the_key() {
+    let server = MockServer::start().await;
+    let source = build_cached_source();
+    Mock::given(path("/busy")).respond_with(ResponseTemplate::new(402)
+        .insert_header("Retry-After", "0")
+        .set_body_json(json!({ "error": { "code": 402_u16, "metadata": { "limit_source": "openrouter_in_flight_budget" } } })))
+        .up_to_n_times(1).with_priority(1).mount(&server).await;
+    Mock::given(path("/busy"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(build_response(Provider::OpenRouter.read_default_model())),
+        )
+        .mount(&server)
+        .await;
+    let client = build_openrouter(&server, "/busy");
+    for _ in 0_u8..2 {
+        assert_eq!(
+            client.assess("query", &source).await.unwrap().choice,
+            Outcome::Match
+        );
+    }
+    server.verify().await;
+}

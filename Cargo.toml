@@ -9,7 +9,7 @@ license = "MIT"
 publish = false
 repository = "https://github.com/macromackie/ev-grep"
 rust-version = "1.98"
-version = "0.8.2"
+version = "0.9.0"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -44,8 +44,8 @@ tracing = { default-features = false, features = ["std"], version = "0.1.44" }
 # Only the ev-grep binary installs a subscriber: JSON records, without ANSI colors or the `log` bridge.
 tracing-subscriber = { default-features = false, features = ["fmt", "json"], version = "0.3.23" }
 # reqwest re-exports `Url` but not its parse error, which an invalid endpoint keeps as its source.
-ev-grep-core = { path = "crates/ev-grep-core", version = "0.8.2" }
-ev-grep-jev = { path = "crates/ev-grep-jev", version = "0.8.2" }
+ev-grep-core = { path = "crates/ev-grep-core", version = "0.9.0" }
+ev-grep-jev = { path = "crates/ev-grep-jev", version = "0.9.0" }
 url = "2.5.8"
 wiremock = "0.6"
 
@@ -218,6 +218,7 @@ cargo-dist-version = "0.33.0"
 checksum = "sha256"
 ci = "github"
 dispatch-releases = true
+github-release = "announce"
 global-artifacts-jobs = ["./release-smoke"]
 install-path = "~/.local/bin"
 install-updater = false

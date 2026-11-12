@@ -8,6 +8,15 @@ use crate::{
     error::{ErrorBody, is_identifier},
 };
 
+const BUDGET_SOURCES: &[&str] = &[
+    "openrouter_credits",
+    "openrouter_guardrail_budget",
+    "openrouter_in_flight_budget",
+    "openrouter_key_limit",
+    "openrouter_workspace_budget",
+];
+const BUDGET_TIMESTAMP_PUNCTUATION: &[u8] = b"-T:.Z";
+
 #[derive(Deserialize)]
 struct Response {
     answers: BTreeMap<String, Choice>,
@@ -91,7 +100,9 @@ struct ErrorDetail {
 
 #[derive(Deserialize)]
 struct ErrorMetadata {
+    limit_source: Option<String>,
     reasons: Option<Vec<String>>,
+    resets_at: Option<String>,
 }
 
 /// The safe fields of a provider error body. A body that is not a JSON error object, such as a
@@ -105,6 +116,18 @@ pub(crate) fn parse_error_body(bytes: &[u8]) -> ErrorBody {
         Some(serde_json::Value::String(text)) => Some(text.into_boxed_str()),
         _ => None,
     };
+    let limit_source = error
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.limit_source.as_deref())
+        .filter(|source| BUDGET_SOURCES.contains(source))
+        .map(Box::from);
+    let resets_at = error
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.resets_at.as_deref())
+        .filter(|value| is_budget_reset(value))
+        .map(Box::from);
     let moderation = error
         .metadata
         .and_then(|metadata| metadata.reasons)
@@ -117,7 +140,9 @@ pub(crate) fn parse_error_body(bytes: &[u8]) -> ErrorBody {
         });
     ErrorBody {
         code: code.filter(|text| is_identifier(text)),
+        limit_source,
         moderation,
+        resets_at,
     }
 }
 
@@ -171,4 +196,12 @@ fn validate(answer: Choice, model: &str) -> Result<Assessment, RequestError> {
         model: model.to_owned(),
         request: None,
     })
+}
+
+fn is_budget_reset(value: &str) -> bool {
+    (20..=30).contains(&value.len())
+        && value.ends_with('Z')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || BUDGET_TIMESTAMP_PUNCTUATION.contains(&byte))
 }

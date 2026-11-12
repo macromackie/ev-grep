@@ -24,8 +24,15 @@ use crate::{
 
 /// Every attempt and wait of one logical request shares this budget.
 const BUDGET: Duration = Duration::from_secs(15);
+const COOLDOWN_FAILURES: &[FailureKind] = &[FailureKind::RateLimited, FailureKind::BudgetBusy];
 /// The most attempts, hedges included, that one logical request makes.
 const MAX_ATTEMPTS: usize = 3;
+
+const TERMINAL_KEY_FAILURES: &[FailureKind] = &[
+    FailureKind::CredentialRejected,
+    FailureKind::KeyBudgetExceeded,
+    FailureKind::SpendingBudgetExceeded,
+];
 
 #[derive(Debug)]
 pub(crate) struct Transport {
@@ -132,10 +139,10 @@ impl Transport {
         });
         let retry_at = add_delay(Instant::now(), delay);
         // Requests that share the limit honor even the rate limit that ends this request.
-        if failure.kind == FailureKind::RateLimited {
+        if COOLDOWN_FAILURES.contains(&failure.kind) {
             self.push_back(retry_at);
         }
-        if failure.kind == FailureKind::CredentialRejected {
+        if TERMINAL_KEY_FAILURES.contains(&failure.kind) {
             let _: &RequestError = self.rejection.get_or_init(|| failure.clone());
         }
         // A retry that could start only at or after the deadline is never made, so the failure
