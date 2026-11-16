@@ -8,7 +8,7 @@ main() {
   : "${GITHUB_REF:?}"
   : "${GITHUB_SHA:?}"
 
-  version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+  version=$(uv run --no-project --managed-python --python 3.14.7 python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
   test "${RELEASE_TAG}" = "v${version}"
   test "${GITHUB_REF}" = "refs/tags/${RELEASE_TAG}"
   head=$(git rev-parse HEAD)

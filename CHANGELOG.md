@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.10.1
+
+Build and smoke-test all four native release targets on GitHub-hosted runners. Linux binaries retain their Ubuntu
+22.04 runtime baseline. Product code, supported models, defaults and request limits are unchanged from 0.10.0.
+
 ## v0.10.0
 
 Accept pinned Jev 1.14 models explicitly: `typesafe/jev-1.14-20261014` on OpenRouter and `jev-1.14.0` on TypeSafe.
