@@ -5,6 +5,7 @@ mod result;
 use core::time::Duration;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
+use ev_grep_core::ContextProfile;
 use futures_util::{StreamExt as _, stream::FuturesUnordered};
 use reqwest::Client;
 use tokio::{
@@ -171,6 +172,7 @@ impl Transport {
         client: &Client,
         endpoint: &str,
         provider: Provider,
+        context_profile: ContextProfile,
         body: &[u8],
         validate: Validator,
     ) -> Result<Completed<Validated>, RequestError>
@@ -183,6 +185,7 @@ impl Transport {
         let post = Post {
             body,
             client,
+            context_profile,
             endpoint,
             provider,
             validate,

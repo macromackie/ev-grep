@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::InputError;
 
 /// One question in a batched request, named by `id`.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Question<'text> {
     pub id: &'text str,
     pub query: &'text str,

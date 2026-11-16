@@ -20,6 +20,26 @@ The combined source limit counts `context` when present, otherwise candidate `te
 `supporting` entry. A supporting line range sends only those lines, but the complete file must pass the source-file
 limit before selection. The separate encoded-request limit includes the query, labels, and JSON encoding.
 
+## Rust context requests
+
+The Rust `Jev` adapter accepts 1–128 named questions about one shared state. Each query remains limited to 8 KiB,
+and the complete request must fit its selected profile. `Evaluator::measure_questions` measures the encoded request
+before sending; `Jev` includes its model, instructions, criteria, question IDs, and state in that measurement.
+Usage belongs to the request once, rather than to every answer.
+
+| `ContextProfile` | Encoded state | Complete encoded request |
+| ---------------- | ------------- | ------------------------ |
+| `Standard`       | 96 KiB        | 96 KiB                   |
+| `Long`           | 1 MiB         | 2 MiB                    |
+
+`Jev::with_context_profile(ContextProfile::Long)` sends `TypeSafe-Danger-Zone-Long-Context: true` on every attempt.
+These byte limits bound memory and encoding; they do not estimate tokens or guarantee provider admission.
+[TypeSafe documents](https://docs.typesafe.ai/models#context-length) a larger token window with this opt-in and
+warns that it can be slower and less accurate. Provider rejections remain errors; the adapter does not truncate or
+silently switch profiles. A caller that caches results must include the profile in its cache identity.
+
+The command-line file, supporting-source, and `--state` input limits above remain 64 KiB.
+
 Transient connection, body-read, and HTTP errors get up to three attempts within one 15-second budget.
 After one second, ev-grep may start one duplicate request if the shared `--jobs` pool has spare capacity.
 The first valid response wins, including `uncertain`; remaining attempts are cancelled.

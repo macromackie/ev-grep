@@ -1,7 +1,15 @@
 use alloc::collections::BTreeSet;
 use core::time::Duration;
 
-use ev_grep_core::{Assessment, Candidate, DecisionBatch, Evaluator, MAX_QUERY_BYTES, Question};
+use ev_grep_core::{
+    Assessment,
+    Candidate,
+    ContextProfile,
+    DecisionBatch,
+    Evaluator,
+    MAX_QUERY_BYTES,
+    Question,
+};
 use reqwest::{
     Client,
     header::{AUTHORIZATION, HeaderMap, HeaderValue},
@@ -13,6 +21,7 @@ use crate::{
     JevError,
     Provider,
     build_context_prompt_id,
+    count_context_request_bytes,
     protocol,
     search_prompt_id,
     telemetry,
@@ -22,10 +31,14 @@ use crate::{
 /// The URL schemes an endpoint may use.
 const ENDPOINT_SCHEMES: &[&str] = &["https", "http"];
 
+/// The largest named question batch accepted by this adapter, before encoded byte limits apply.
+pub const MAX_QUESTIONS: usize = 128;
+
 /// A client that sends search and context questions to a provider's decision model.
 #[derive(Debug)]
 pub struct Jev {
     client: Client,
+    context_profile: ContextProfile,
     endpoint: String,
     model: String,
     prompt: protocol::Prompt,
@@ -58,6 +71,7 @@ impl Jev {
             .map_err(JevError::Client)?;
         Ok(Self {
             client,
+            context_profile: ContextProfile::default(),
             endpoint: endpoint.into(),
             model: model.into(),
             prompt: protocol::prompt()?,
@@ -81,8 +95,12 @@ impl Jev {
         prompt_id: &str,
     ) -> Result<DecisionBatch, JevError> {
         let body = serde_json::to_vec(request).map_err(JevError::Encode)?;
-        if body.len() > MAX_REQUEST_BYTES {
-            return Err(JevError::RequestTooLarge);
+        let limit_bytes = self.context_profile.read_max_request_bytes();
+        if body.len() > limit_bytes {
+            return Err(JevError::RequestTooLarge {
+                bytes: body.len(),
+                limit_bytes,
+            });
         }
         let completed = self
             .transport
@@ -90,6 +108,7 @@ impl Jev {
                 &self.client,
                 &self.endpoint,
                 self.provider,
+                self.context_profile,
                 &body,
                 |bytes| protocol::parse_assessment(bytes, &self.model, ids),
             )
@@ -101,6 +120,15 @@ impl Jev {
         batch.request.hedges = completed.hedges;
         batch.request.elapsed_ms = completed.elapsed_ms;
         Ok(batch)
+    }
+
+    /// Select explicit context admission limits. Long context sends the provider's opt-in header;
+    /// its byte bounds cannot guarantee that a request fits the provider's token window.
+    #[inline]
+    #[must_use]
+    pub const fn with_context_profile(mut self, profile: ContextProfile) -> Self {
+        self.context_profile = profile;
+        self
     }
 
     /// Send requests to `endpoint` for a model that `Provider::list_supported_models` lists.
@@ -165,7 +193,7 @@ impl Evaluator for Jev {
         questions: &[Question<'_>],
         state: &serde_json::Value,
     ) -> Result<DecisionBatch, JevError> {
-        if questions.is_empty() || questions.len() > 32 {
+        if questions.is_empty() || questions.len() > MAX_QUESTIONS {
             return Err(JevError::QuestionCount);
         }
         let mut question_ids = BTreeSet::new();
@@ -177,8 +205,12 @@ impl Evaluator for Jev {
             }
         }
         let state_bytes = serde_json::to_vec(state).map_err(JevError::Encode)?;
-        if state_bytes.len() > MAX_REQUEST_BYTES {
-            return Err(JevError::StateTooLarge);
+        let limit_bytes = self.context_profile.read_max_state_bytes();
+        if state_bytes.len() > limit_bytes {
+            return Err(JevError::StateTooLarge {
+                bytes: state_bytes.len(),
+                limit_bytes,
+            });
         }
         drop(ev_grep_core::parse_json(&state_bytes)?);
         let ids: Vec<&str> = question_ids.into_iter().collect();
@@ -189,10 +221,16 @@ impl Evaluator for Jev {
         )
         .await
     }
-}
 
-/// The largest encoded request or state Jev sends, in bytes.
-const MAX_REQUEST_BYTES: usize = 96 * 1024;
+    #[inline]
+    fn measure_questions(
+        &self,
+        questions: &[Question<'_>],
+        state: &serde_json::Value,
+    ) -> Result<usize, JevError> {
+        count_context_request_bytes(&self.model, questions, state)
+    }
+}
 
 fn validate_query(query: &str) -> Result<(), JevError> {
     if query.trim().is_empty() || query.len() > MAX_QUERY_BYTES {

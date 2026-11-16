@@ -48,6 +48,20 @@ pub trait Evaluator: Sync {
         questions: &[crate::Question<'_>],
         state: &serde_json::Value,
     ) -> impl Future<Output = Result<crate::DecisionBatch, Self::Error>> + Send;
+
+    /// Measure the encoded request before sending it. The default measures logical questions and
+    /// state for local evaluators; network evaluators must override it with their full wire format.
+    #[inline]
+    fn measure_questions(
+        &self,
+        questions: &[crate::Question<'_>],
+        state: &serde_json::Value,
+    ) -> Result<usize, Self::Error> {
+        serde_json::to_vec(&(questions, state))
+            .map(|bytes| bytes.len())
+            .map_err(InputError::Json)
+            .map_err(Self::Error::from)
+    }
 }
 
 /// Assesses each input in a bounded pool that all input modes share.

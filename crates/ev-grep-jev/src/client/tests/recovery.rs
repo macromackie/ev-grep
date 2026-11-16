@@ -1,4 +1,4 @@
-use ev_grep_core::{Evaluator as _, Outcome};
+use ev_grep_core::{ContextProfile, Evaluator as _, Outcome};
 use serde_json::json;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
 
@@ -30,12 +30,28 @@ async fn a_transient_failure_is_retried() {
         .respond_with(ResponseTemplate::new(200).set_body_json(build_response(model)))
         .mount(&server)
         .await;
-    let recovering = build_openrouter(&server, "/recover");
+    let recovering =
+        build_openrouter(&server, "/recover").with_context_profile(ContextProfile::Long);
     let answer = recovering
         .assess("Returns cached values", &build_cached_source())
         .await
         .unwrap();
     assert_eq!(answer.choice, Outcome::Match);
+    let requests = server.received_requests().await.unwrap();
+    assert!(requests.len() >= 2);
+    let original = requests.first().unwrap();
+    assert!(requests.iter().all(|request| {
+        request.body == original.body
+            && request.headers.get("typesafe-danger-zone-long-context")
+                == original.headers.get("typesafe-danger-zone-long-context")
+    }));
+    assert_eq!(
+        original
+            .headers
+            .get("typesafe-danger-zone-long-context")
+            .unwrap(),
+        "true"
+    );
 }
 
 #[tokio::test]
@@ -186,10 +202,19 @@ async fn payment_limits_are_typed_and_redacted() {
 async fn temporary_budget_contention_recovers_without_rejecting_the_key() {
     let server = MockServer::start().await;
     let source = build_cached_source();
-    Mock::given(path("/busy")).respond_with(ResponseTemplate::new(402)
-        .insert_header("Retry-After", "0")
-        .set_body_json(json!({ "error": { "code": 402_u16, "metadata": { "limit_source": "openrouter_in_flight_budget" } } })))
-        .up_to_n_times(1).with_priority(1).mount(&server).await;
+    let contention = json!({
+        "error": { "code": 402_u16, "metadata": { "limit_source": "openrouter_in_flight_budget" } }
+    });
+    Mock::given(path("/busy"))
+        .respond_with(
+            ResponseTemplate::new(402)
+                .insert_header("Retry-After", "0")
+                .set_body_json(contention),
+        )
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
     Mock::given(path("/busy"))
         .respond_with(
             ResponseTemplate::new(200)

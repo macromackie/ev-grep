@@ -1,3 +1,4 @@
+use ev_grep_core::ContextProfile;
 use reqwest::{Client, Response, header::CONTENT_TYPE};
 use tokio::{sync::SemaphorePermit, time::Instant};
 
@@ -11,6 +12,7 @@ pub(super) async fn send<'permit, Validated, Validator>(
     client: &Client,
     endpoint: &str,
     provider: Provider,
+    context_profile: ContextProfile,
     request: &[u8],
     permit: SemaphorePermit<'permit>,
     validate: &Validator,
@@ -21,13 +23,14 @@ where
 {
     let started = Instant::now();
     let result = async {
-        let mut response = client
+        let mut pending = client
             .post(endpoint)
             .header(CONTENT_TYPE, "application/json")
-            .body(request.to_vec())
-            .send()
-            .await
-            .map_err(RequestError::from_transport)?;
+            .body(request.to_vec());
+        if context_profile == ContextProfile::Long {
+            pending = pending.header("TypeSafe-Danger-Zone-Long-Context", "true");
+        }
+        let mut response = pending.send().await.map_err(RequestError::from_transport)?;
         if !response.status().is_success() {
             // Only a 401, 402, or 403 body is read, and only for its error code and moderation
             // reasons.

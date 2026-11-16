@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.10.0
+
+Accept pinned Jev 1.14 models explicitly: `typesafe/jev-1.14-20261014` on OpenRouter and `jev-1.14.0` on TypeSafe.
+Jev 1.13 remains the default and remains available for replaying earlier evaluations.
+
+Rust callers can ask up to 128 named questions about shared context and measure the complete encoded request before
+sending it. Request usage is recorded once for the batch.
+
+The new `ContextProfile::Long` explicitly enables the provider's larger context window. It admits up to 1 MiB of
+encoded state and 2 MiB of encoded request; standard admission limits remain unchanged. Larger context can be slower
+and less accurate, and byte admission does not guarantee that a request fits the provider's token limit.
+
+Library callers matching `JevError::RequestTooLarge` or `StateTooLarge` must handle their new `bytes` and `limit_bytes`
+fields. File search and command-line input limits remain unchanged.
+
 ## v0.9.0
 
 OpenRouter payment refusals distinguish exhausted keys, insufficient credit, configured spending budgets, and temporary in-flight contention. Temporary contention follows the existing retry deadline. Provider response text remains redacted.

@@ -2,10 +2,10 @@ use alloc::fmt;
 
 use serde::Serialize;
 
-/// The models validated against the labeled evals for each provider, default first. Add a model
-/// only after an eval run on it.
-const OPENROUTER_MODELS: [&str; 1] = ["typesafe/jev-1.13-20260917"];
-const TYPESAFE_MODELS: [&str; 1] = ["jev-1.13.0"];
+/// Versioned models accepted for each provider, default first. Qualify additions with labeled
+/// evaluations before publishing them.
+const OPENROUTER_MODELS: [&str; 2] = ["typesafe/jev-1.13-20260917", "typesafe/jev-1.14-20261014"];
+const TYPESAFE_MODELS: [&str; 2] = ["jev-1.13.0", "jev-1.14.0"];
 
 /// A decision-model provider and its endpoint, models and key variable.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -17,7 +17,7 @@ pub enum Provider {
 }
 
 impl Provider {
-    /// The models validated against the labeled evals for this provider, default first.
+    /// The versioned models accepted for this provider, default first.
     #[inline]
     #[must_use]
     pub const fn list_supported_models(self) -> &'static [&'static str] {

@@ -1,3 +1,4 @@
+use ev_grep_core::ContextProfile;
 use reqwest::Client;
 use tokio::sync::SemaphorePermit;
 use tracing::Instrument as _;
@@ -9,6 +10,7 @@ use crate::{Provider, RequestError, telemetry};
 pub(super) struct Post<'post, Validator> {
     pub body: &'post [u8],
     pub client: &'post Client,
+    pub context_profile: ContextProfile,
     pub endpoint: &'post str,
     pub provider: Provider,
     pub validate: Validator,
@@ -34,6 +36,7 @@ where
             self.client,
             self.endpoint,
             self.provider,
+            self.context_profile,
             self.body,
             permit,
             &self.validate,

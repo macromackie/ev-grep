@@ -35,17 +35,23 @@ pub enum JevError {
     Jobs,
     #[error("invalid prompt.json")]
     Prompt(#[source] serde_json::Error),
-    #[error("expected 1 to 32 questions")]
+    #[error("expected 1 to 128 questions")]
     QuestionCount,
     #[error("question IDs must be unique and contain 1 to 64 bytes")]
     QuestionId,
     /// A request was sent and produced no assessment.
     #[error(transparent)]
     Request(#[from] RequestError),
-    #[error("encoded request exceeds 98304 bytes; context was not truncated")]
-    RequestTooLarge,
-    #[error("encoded state exceeds 98304 bytes; context was not truncated")]
-    StateTooLarge,
+    #[error(
+        "encoded request is {bytes:?} bytes; limit is {limit_bytes:?} bytes; context was not \
+         truncated"
+    )]
+    RequestTooLarge { bytes: usize, limit_bytes: usize },
+    #[error(
+        "encoded state is {bytes:?} bytes; limit is {limit_bytes:?} bytes; context was not \
+         truncated"
+    )]
+    StateTooLarge { bytes: usize, limit_bytes: usize },
     #[error("provider must be openrouter or typesafe")]
     UnknownProvider,
     #[error("provider endpoint must use HTTP or HTTPS, without credentials, query, or fragment")]
@@ -96,7 +102,7 @@ impl Failure for JevError {
             Self::InvalidQuery | Self::QuestionCount | Self::QuestionId | Self::Encode(_) => {
                 ErrorKind::InvalidInput
             },
-            Self::RequestTooLarge | Self::StateTooLarge => ErrorKind::TooLarge,
+            Self::RequestTooLarge { .. } | Self::StateTooLarge { .. } => ErrorKind::TooLarge,
         }
     }
 }

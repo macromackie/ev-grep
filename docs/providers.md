@@ -16,10 +16,10 @@ ev-grep --provider typesafe 'Performs database operations' src/
 
 ## Models
 
-| Provider     | Credential           | Supported models, default first |
-| ------------ | -------------------- | ------------------------------- |
-| `openrouter` | `OPENROUTER_API_KEY` | `typesafe/jev-1.13-20260917`    |
-| `typesafe`   | `TYPESAFE_API_KEY`   | `jev-1.13.0`                    |
+| Provider     | Credential           | Supported models, default first                            |
+| ------------ | -------------------- | ---------------------------------------------------------- |
+| `openrouter` | `OPENROUTER_API_KEY` | `typesafe/jev-1.13-20260917`, `typesafe/jev-1.14-20261014` |
+| `typesafe`   | `TYPESAFE_API_KEY`   | `jev-1.13.0`, `jev-1.14.0`                                 |
 
 ```sh
 ev-grep --provider openrouter --model typesafe/jev-1.13-20260917 \
@@ -28,15 +28,19 @@ ev-grep --provider openrouter --model typesafe/jev-1.13-20260917 \
 
 Set `EV_GREP_PROVIDER` and `EV_GREP_MODEL` for shell defaults. Flags override those variables. API keys do not select a provider implicitly. Unsupported models fail before requests.
 
+Jev 1.14 is available explicitly with `--model`; Jev 1.13 remains the default. A historical labeled RepoQA comparison
+found higher precision and lower recall in most 1.14 cases. Source versions and run times also differed.
+
 The table lists the models that ev-grep's model evaluations have checked. To send a model outside it, such as a newer
 Jev release, add `--unvalidated-model`:
 
 ```sh
-ev-grep --provider typesafe --model jev-1.14.0 --unvalidated-model \
+ev-grep --provider typesafe --model MODEL_ID --unvalidated-model \
   'Performs database operations' src/
 ```
 
-The `begin` record then sets `model_validated` to `false`. Responses must still name the requested model.
+Replace `MODEL_ID` with the provider's exact versioned model identifier. The `begin` record then sets
+`model_validated` to `false`. Responses must still name the requested model.
 
 ## Requests
 

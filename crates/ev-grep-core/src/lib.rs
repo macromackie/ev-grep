@@ -3,6 +3,7 @@
 extern crate alloc;
 
 mod candidate;
+mod context_profile;
 mod decision;
 mod discovery;
 mod error;
@@ -17,6 +18,7 @@ mod target;
 mod telemetry;
 
 pub use candidate::{Candidate, Input, Loaded, SkipReason, SupportingSource};
+pub use context_profile::ContextProfile;
 pub use decision::{
     Assessment,
     DecisionBatch,
